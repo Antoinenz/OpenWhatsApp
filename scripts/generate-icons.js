@@ -72,7 +72,9 @@ function buildPNG(size, drawFn) {
   ]);
 }
 
-// ── Icon artwork: WhatsApp-green circle ───────────────────────────────────────
+// ── Icon artwork: OpenWhatsApp blue circle ────────────────────────────────────
+// Uses #1478D4 (medium blue) instead of WhatsApp's green so it's clearly
+// distinguishable as the open-source client.
 function drawCircleIcon(rgba, size) {
   rgba.fill(0); // transparent background
   const cx = size / 2;
@@ -86,9 +88,9 @@ function drawCircleIcon(rgba, size) {
       const dist = Math.sqrt(dx * dx + dy * dy);
       if (dist <= r) {
         const i = (y * size + x) * 4;
-        rgba[i] = 0x00;   // R
-        rgba[i + 1] = 0xa8; // G  (#00a884 = WhatsApp green)
-        rgba[i + 2] = 0x84; // B
+        rgba[i]     = 0x14; // R
+        rgba[i + 1] = 0x78; // G  (#1478D4 = OpenWhatsApp blue)
+        rgba[i + 2] = 0xD4; // B
         rgba[i + 3] = 255;  // A
       }
     }

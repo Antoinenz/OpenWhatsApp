@@ -17,8 +17,9 @@ pub const INJECTION_SCRIPT: &str = r#"
   function rebrand(text) {
     if (typeof text !== "string" || text.length === 0) return text;
     let out = text.replace(/WhatsApp Web/gi, "OpenWhatsApp");
-    // Only rewrite a *standalone* "WhatsApp" so we don't break "WhatsApp Inc."
-    if (/^\s*WhatsApp\s*$/.test(out)) out = out.replace(/WhatsApp/, "OpenWhatsApp");
+    // A text node whose entire content is "WhatsApp" is the left-panel header
+    // title — rename it to "Chats" (cleaner than "OpenWhatsApp" there).
+    if (/^\s*WhatsApp\s*$/.test(out)) out = out.replace(/WhatsApp/, "Chats");
     return out;
   }
 
@@ -99,6 +100,30 @@ pub const INJECTION_SCRIPT: &str = r#"
     }
   }
 
+  // ── Video call button hider ────────────────────────────────────────────
+  // The in-chat video call button only opens an "install desktop app" prompt,
+  // so we remove it entirely.  We scope the search to <header> elements so we
+  // never accidentally hide video thumbnails inside message bubbles.
+  function hideVideoCallButton() {
+    document.querySelectorAll("header").forEach(function (h) {
+      ["video-call", "video"].forEach(function (icon) {
+        h.querySelectorAll('[data-icon="' + icon + '"]').forEach(function (el) {
+          // Walk up to the nearest button / role=button ancestor within the header.
+          let cur = el.parentElement;
+          for (let i = 0; i < 6 && cur && cur !== h.parentElement; i++) {
+            const tag = cur.tagName;
+            const role = cur.getAttribute && cur.getAttribute("role");
+            if (tag === "BUTTON" || tag === "A" || role === "button") {
+              cur.style.setProperty("display", "none", "important");
+              return;
+            }
+            cur = cur.parentElement;
+          }
+        });
+      });
+    });
+  }
+
   // ── Title rewrite (preserve "(3) " unread prefix) ──────────────────────
   function rebrandTitle() {
     const t = document.title || "";
@@ -114,6 +139,7 @@ pub const INJECTION_SCRIPT: &str = r#"
 
     walkText(document.body);
     sweepBanners(document.body);
+    hideVideoCallButton();
     rebrandTitle();
 
     const mo = new MutationObserver((mutations) => {
@@ -122,6 +148,7 @@ pub const INJECTION_SCRIPT: &str = r#"
           if (added.nodeType === Node.ELEMENT_NODE) {
             walkText(added);
             if (!killIfBanner(added)) sweepBanners(added);
+            hideVideoCallButton();
           } else if (added.nodeType === Node.TEXT_NODE) {
             walkText(added);
           }
@@ -137,7 +164,7 @@ pub const INJECTION_SCRIPT: &str = r#"
         childList: true, characterData: true, subtree: true,
       });
     }
-    setInterval(rebrandTitle, 2000);  // safety net
+    setInterval(function () { rebrandTitle(); hideVideoCallButton(); }, 2000);
   }
 
   if (document.readyState === "loading") {
