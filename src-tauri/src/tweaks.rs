@@ -1,7 +1,8 @@
 /// JS injected into web.whatsapp.com (in addition to the notification shim).
 ///
 ///   1. Rebrands UI text "WhatsApp Web" / standalone "WhatsApp" → "OpenWhatsApp"
-///   2. Hides the "Download WhatsApp Desktop / Update WhatsApp" banners
+///   2. Hides every flavour of "Download / Get / Install / Try WhatsApp Desktop"
+///      banner *including* the modal dialog that pops up when you click Call.
 ///   3. Re-writes the document title (preserving unread counts like "(3) …")
 ///   4. Adds keyboard shortcuts:
 ///        Ctrl+W → close the current chat (deselect)
@@ -17,20 +18,13 @@ pub const INJECTION_SCRIPT: &str = r#"
   function rebrand(text) {
     if (typeof text !== "string" || text.length === 0) return text;
     let out = text.replace(/WhatsApp Web/gi, "OpenWhatsApp");
-    // Only rewrite a *standalone* "WhatsApp" so we don't break "WhatsApp Inc."
     if (/^\s*WhatsApp\s*$/.test(out)) out = out.replace(/WhatsApp/, "OpenWhatsApp");
     return out;
   }
 
-  // We must NEVER touch the contents of an actual chat message.
   const SKIP_SELECTORS = [
-    "[role='row']",
-    "[data-id]",
-    ".copyable-text",
-    ".selectable-text",
-    "input",
-    "textarea",
-    "[contenteditable='true']",
+    "[role='row']", "[data-id]", ".copyable-text", ".selectable-text",
+    "input", "textarea", "[contenteditable='true']",
   ];
   function isInsideMessage(node) {
     const el = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
@@ -55,51 +49,143 @@ pub const INJECTION_SCRIPT: &str = r#"
     for (const c of node.childNodes) walkText(c);
   }
 
-  // ── Banner hider ───────────────────────────────────────────────────────
+  // ── Banner / Install-Modal hider ──────────────────────────────────────
+  // Patterns are tested case-insensitively against an element's textContent.
   const BANNER_PATTERNS = [
     /\bdownload\s+whatsapp\b/i,
-    /\bget\s+whatsapp\s+(for|on)\b/i,
+    /\bget\s+whatsapp\b/i,
+    /\bget\s+the\s+(whatsapp\s+)?app\b/i,
     /\btry\s+whatsapp\s+desktop\b/i,
     /\bupdate\s+(your\s+)?whatsapp\b/i,
-    /\binstall\s+whatsapp\s+desktop\b/i,
+    /\binstall\s+whatsapp\b/i,
+    /\buse\s+whatsapp\s+(desktop|for\s+windows)\b/i,
+    /\bopen\s+(in|with)\s+whatsapp\s+(desktop|for\s+windows)\b/i,
+    /\bcontinue\s+(on|in)\s+whatsapp\s+desktop\b/i,
+    /\bswitch\s+to\s+whatsapp\s+desktop\b/i,
+    /\bwhatsapp\s+for\s+windows\b/i,
   ];
-  function looksLikeBanner(el) {
-    if (!el || el.nodeType !== Node.ELEMENT_NODE) return false;
-    if (isInsideMessage(el)) return false;
-    const t = (el.textContent || "").trim();
-    if (t.length === 0 || t.length > 400) return false;
-    return BANNER_PATTERNS.some((p) => p.test(t));
+
+  function matchesBanner(text) {
+    if (!text) return false;
+    return BANNER_PATTERNS.some((p) => p.test(text));
   }
+
+  function trim(s) { return (s || "").trim(); }
+
+  /**
+   * Walk *up* from a node whose textContent matches a banner pattern, hiding
+   * the smallest ancestor that fully encloses the banner *card* without
+   * spilling into siblings (other chats, etc.).
+   *
+   * Stops climbing at:
+   *   - the body / html root
+   *   - a semantic container tag: <aside>, <main>, <nav>, <header>, <footer>
+   *   - a node with an ARIA role that bounds a region: navigation / main /
+   *     complementary / list / listbox
+   *   - a parent with many children (looks like a virtualised list)
+   *   - a parent whose textContent is suddenly very large (entered a wrapper)
+   *   - a parent that no longer matches any banner pattern at all
+   *
+   * Immediately returns at:
+   *   - position: fixed / sticky (a floating banner)
+   *   - role=banner / alert / alertdialog / dialog (a modal / call-out)
+   */
   function findBannerRoot(el) {
     let cur = el;
-    for (let i = 0; cur && i < 6; i++) {
-      const style = (cur.nodeType === Node.ELEMENT_NODE) ? getComputedStyle(cur) : null;
-      if (style && (style.position === "fixed" || style.position === "sticky")) return cur;
-      const role = cur.getAttribute && cur.getAttribute("role");
-      if (role === "banner" || role === "alert" || role === "alertdialog") return cur;
-      cur = cur.parentElement;
+    let best = el;
+    for (let i = 0; cur && cur.parentElement && i < 8; i++) {
+      const parent = cur.parentElement;
+      if (parent === document.body || parent === document.documentElement) break;
+
+      const tag = parent.tagName;
+      if (tag === "ASIDE" || tag === "MAIN" || tag === "NAV" ||
+          tag === "HEADER" || tag === "FOOTER") break;
+
+      // Immediate-return signals
+      try {
+        const style = getComputedStyle(parent);
+        const role = parent.getAttribute && parent.getAttribute("role");
+        if (style.position === "fixed" || style.position === "sticky") return parent;
+        if (role === "banner" || role === "alert" || role === "alertdialog" || role === "dialog") return parent;
+        if (role === "navigation" || role === "main" || role === "complementary" ||
+            role === "list" || role === "listbox" || role === "grid") break;
+      } catch (_) {}
+
+      // Parent must still carry banner-like text.
+      if (!matchesBanner(parent.textContent || "")) break;
+
+      // Looks like a virtualised list (many sibling rows).
+      if (parent.children.length > 6) break;
+
+      // Wrapper too big — we've definitely left the card.
+      if (trim(parent.textContent).length > 700) break;
+
+      best = parent;
+      cur = parent;
     }
-    return el;
+    return best;
   }
-  function killIfBanner(el) {
-    if (!looksLikeBanner(el)) return false;
+
+  function hide(el) {
+    try { el.style.setProperty("display", "none", "important"); } catch (_) {}
+    try { el.style.setProperty("visibility", "hidden", "important"); } catch (_) {}
+  }
+
+  function killBanner(el) {
     const root = findBannerRoot(el);
-    root.style.setProperty("display", "none", "important");
-    return true;
+    hide(root);
+    return root;
   }
+
   function sweepBanners(root) {
     if (!root || !root.querySelectorAll) return;
-    const cands = root.querySelectorAll(
-      "[role='banner'], [role='alert'], [role='alertdialog'], [role='dialog'], div"
-    );
-    for (const c of cands) {
-      if (looksLikeBanner(c)) {
-        findBannerRoot(c).style.setProperty("display", "none", "important");
+    // Cheap pre-filter: only inspect elements whose own textContent matches.
+    // querySelectorAll('*') would be huge — walk via TreeWalker to bail early.
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, {
+      acceptNode(el) {
+        if (isInsideMessage(el)) return NodeFilter.FILTER_REJECT;
+        if (!matchesBanner(el.textContent || "")) return NodeFilter.FILTER_SKIP;
+        // Skip elements whose textContent is just the same as a banner-y child's —
+        // we only want the lowest matching node, then `findBannerRoot` walks up.
+        for (const c of el.children) {
+          if (matchesBanner((c.textContent || ""))) return NodeFilter.FILTER_SKIP;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      },
+    });
+    const hits = [];
+    let n;
+    while ((n = walker.nextNode())) hits.push(n);
+    for (const h of hits) killBanner(h);
+  }
+
+  /**
+   * Special-case: the "Install WhatsApp for Windows to make calls" modal.
+   * It's a full-screen dialog with backdrop; we kill the dialog AND walk
+   * out to the overlay so the backdrop disappears too.
+   */
+  function killInstallDialogs(root) {
+    root = root || document.body;
+    if (!root.querySelectorAll) return;
+    const dialogs = root.querySelectorAll('[role="dialog"], [role="alertdialog"]');
+    for (const d of dialogs) {
+      const txt = (d.textContent || "").toLowerCase();
+      if (matchesBanner(txt)) {
+        hide(d);
+        // Walk out to the fixed-position overlay (backdrop) and hide it too.
+        let p = d.parentElement;
+        for (let i = 0; p && i < 6 && p !== document.body; i++) {
+          try {
+            const st = getComputedStyle(p);
+            if (st.position === "fixed" || st.position === "absolute") { hide(p); break; }
+          } catch (_) {}
+          p = p.parentElement;
+        }
       }
     }
   }
 
-  // ── Title rewrite (preserve "(3) " unread prefix) ──────────────────────
+  // ── Title rewrite ──────────────────────────────────────────────────────
   function rebrandTitle() {
     const t = document.title || "";
     let n = t.replace(/WhatsApp Web/gi, "OpenWhatsApp");
@@ -114,19 +200,26 @@ pub const INJECTION_SCRIPT: &str = r#"
 
     walkText(document.body);
     sweepBanners(document.body);
+    killInstallDialogs(document.body);
     rebrandTitle();
 
     const mo = new MutationObserver((mutations) => {
+      const dirtyRoots = new Set();
       for (const m of mutations) {
         for (const added of m.addedNodes) {
           if (added.nodeType === Node.ELEMENT_NODE) {
             walkText(added);
-            if (!killIfBanner(added)) sweepBanners(added);
+            dirtyRoots.add(added);
           } else if (added.nodeType === Node.TEXT_NODE) {
             walkText(added);
+            if (added.parentElement) dirtyRoots.add(added.parentElement);
           }
         }
         if (m.type === "characterData") walkText(m.target);
+      }
+      for (const r of dirtyRoots) {
+        sweepBanners(r);
+        killInstallDialogs(r);
       }
     });
     mo.observe(document.body, { childList: true, subtree: true, characterData: true });
@@ -137,7 +230,8 @@ pub const INJECTION_SCRIPT: &str = r#"
         childList: true, characterData: true, subtree: true,
       });
     }
-    setInterval(rebrandTitle, 2000);  // safety net
+    // Safety net for SPA transitions that don't touch document.body directly.
+    setInterval(() => { rebrandTitle(); killInstallDialogs(document.body); }, 1500);
   }
 
   if (document.readyState === "loading") {
@@ -159,17 +253,14 @@ pub const INJECTION_SCRIPT: &str = r#"
     if (!e.ctrlKey || e.altKey || e.metaKey) return;
     const k = e.key.toLowerCase();
 
-    // Ctrl+W → close / deselect the current chat
     if (k === "w" && !e.shiftKey) {
       e.preventDefault();
       e.stopImmediatePropagation();
       fireEsc();
-      // Some WhatsApp surfaces (image viewer, profile, etc.) have explicit X
       const closeIcon = document.querySelector(
         "header [data-icon='x'], [data-icon='x-viewer'], [aria-label='Close']"
       );
       if (closeIcon) { try { closeIcon.click(); } catch (_) {} }
-      // SPA fallback: push base URL so the right pane re-empties
       try {
         window.history.pushState({}, "", "/");
         window.dispatchEvent(new PopStateEvent("popstate"));
@@ -177,13 +268,12 @@ pub const INJECTION_SCRIPT: &str = r#"
       return;
     }
 
-    // Ctrl+Q → quit
     if (k === "q" && !e.shiftKey) {
       e.preventDefault();
       e.stopImmediatePropagation();
       try { window.__TAURI_INTERNALS__.invoke("quit_app"); } catch (_) {}
       return;
     }
-  }, true);  // capture so we beat WhatsApp's own handlers
+  }, true);
 })();
 "#;
