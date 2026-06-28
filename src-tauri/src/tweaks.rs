@@ -1,10 +1,14 @@
 /// JS injected into web.whatsapp.com (in addition to the notification shim).
 ///
-///   1. Rebrands UI text "WhatsApp Web" / standalone "WhatsApp" → "OpenWhatsApp"
-///   2. Hides every flavour of "Download / Get / Install / Try WhatsApp Desktop"
+///   1. Stubs the Electron runtime (window.require / window.process / window.electron)
+///      so WhatsApp Web's Electron code-path initialises cleanly inside WebView2.
+///   2. Spoofs navigator.userAgent to include WhatsApp/Electron tokens (preserving
+///      the real Chrome version so the server never shows "Update Chrome").
+///   3. Rebrands UI text "WhatsApp Web" / standalone "WhatsApp" → "OpenWhatsApp"
+///   4. Hides every flavour of "Download / Get / Install / Try WhatsApp Desktop"
 ///      banner *including* the modal dialog that pops up when you click Call.
-///   3. Re-writes the document title (preserving unread counts like "(3) …")
-///   4. Adds keyboard shortcuts:
+///   5. Re-writes the document title (preserving unread counts like "(3) …")
+///   6. Adds keyboard shortcuts:
 ///        Ctrl+W → close the current chat (deselect)
 ///        Ctrl+Q → quit OpenWhatsApp
 ///
@@ -13,6 +17,206 @@
 pub const INJECTION_SCRIPT: &str = r#"
 (function () {
   "use strict";
+
+  // ── Electron runtime stub ──────────────────────────────────────────────
+  // WhatsApp Web detects Electron via window.process.type === 'renderer' and
+  // window.require('electron').  We provide a complete-enough fake so the app
+  // initialises on the Electron code-path without crashing on missing APIs.
+  //
+  // Key design choices:
+  //   • ipcRenderer: all channels are silent no-ops / resolved Promises.
+  //     WhatsApp's React router owns its own navigation state; IPC calls for
+  //     chat routing are side-effects (native title bar, etc.) — safe to drop.
+  //   • shell.openExternal → window.open (so external links still open)
+  //   • BrowserWindow.close → our quit_app Tauri command
+  //   • Everything else returns a neutral default.
+  (function () {
+    // ── process ───────────────────────────────────────────────────────────
+    var chromeVer = (navigator.userAgent.match(/Chrome\/([\d.]+)/) || [])[1] || "120.0.0.0";
+    try {
+      if (!window.process || typeof window.process.type === "undefined") {
+        Object.defineProperty(window, "process", {
+          value: {
+            type:     "renderer",
+            platform: "win32",
+            versions: { electron: "32.0.0", chrome: chromeVer, node: "20.18.0" },
+            env:      {},
+            argv:     [],
+            execPath: "",
+            pid:      1,
+          },
+          writable: true, configurable: true,
+        });
+      }
+    } catch (_) {}
+
+    // ── ipcRenderer ───────────────────────────────────────────────────────
+    var _listeners = Object.create(null);
+    var ipcRenderer = {
+      send:               function () {},
+      sendSync:           function () { return undefined; },
+      sendToHost:         function () {},
+      postMessage:        function () {},
+      invoke:             function () { return Promise.resolve(null); },
+      on: function (ch, fn) {
+        (_listeners[ch] = _listeners[ch] || []).push(fn); return this;
+      },
+      once: function (ch, fn) {
+        var w = function () { ipcRenderer.removeListener(ch, w); fn.apply(this, arguments); };
+        return this.on(ch, w);
+      },
+      removeListener: function (ch, fn) {
+        var a = _listeners[ch]; if (!a) return this;
+        var i = a.indexOf(fn); if (i !== -1) a.splice(i, 1); return this;
+      },
+      removeAllListeners: function (ch) {
+        if (ch) delete _listeners[ch];
+        else Object.keys(_listeners).forEach(function (k) { delete _listeners[k]; });
+        return this;
+      },
+      eventNames: function () { return Object.keys(_listeners); },
+    };
+
+    // ── shell ─────────────────────────────────────────────────────────────
+    var shell = {
+      openExternal: function (url) {
+        try { window.open(url, "_blank", "noopener,noreferrer"); } catch (_) {}
+        return Promise.resolve();
+      },
+      openPath:         function () { return Promise.resolve(""); },
+      showItemInFolder: function () {},
+      beep:             function () {},
+    };
+
+    // ── nativeImage ───────────────────────────────────────────────────────
+    function fakeImg() {
+      return { isEmpty: function () { return true; }, toDataURL: function () { return ""; },
+               getSize: function () { return { width: 0, height: 0 }; } };
+    }
+    var nativeImage = {
+      createFromDataURL: fakeImg, createEmpty: fakeImg, createFromPath: fakeImg,
+    };
+
+    // ── clipboard ─────────────────────────────────────────────────────────
+    var clipboard = {
+      readText:         function () { return ""; },
+      writeText:        function (t) { try { navigator.clipboard.writeText(t); } catch (_) {} },
+      readHTML:         function () { return ""; },
+      writeHTML:        function () {},
+      clear:            function () {},
+      availableFormats: function () { return []; },
+    };
+
+    // ── BrowserWindow (current window proxy) ──────────────────────────────
+    function noop() {}
+    var fakeWin = {
+      minimize:       noop, maximize: noop, unmaximize: noop,
+      restore:        noop, hide: noop, show: noop, focus: noop,
+      isMaximized:    function () { return false; },
+      isMinimized:    function () { return false; },
+      isFullScreen:   function () { return false; },
+      isVisible:      function () { return true; },
+      setTitle:       noop, getTitle: function () { return document.title; },
+      setProgressBar: noop, setOverlayIcon: noop, flashFrame: noop,
+      close:          function () {
+        try { window.__TAURI_INTERNALS__.invoke("quit_app"); } catch (_) {}
+      },
+      webContents: {
+        send:              noop,
+        executeJavaScript: function () { return Promise.resolve(); },
+        getURL:            function () { return location.href; },
+        getUserAgent:      function () { return navigator.userAgent; },
+      },
+      on: function () { return this; },
+      once: function () { return this; },
+      removeListener: function () { return this; },
+    };
+
+    // ── app ───────────────────────────────────────────────────────────────
+    var app = {
+      getVersion:           function () { return "2.2422.6"; },
+      getName:              function () { return "WhatsApp"; },
+      getPath:              function () { return ""; },
+      getLocale:            function () { return navigator.language || "en-US"; },
+      getLocaleCountryCode: function () { return (navigator.language || "en-US").split("-")[1] || "US"; },
+      isPackaged:           true,
+      on: function () { return this; },
+      once: function () { return this; },
+      removeListener: function () { return this; },
+      quit:           function () {
+        try { window.__TAURI_INTERNALS__.invoke("quit_app"); } catch (_) {}
+      },
+    };
+
+    // ── remote (legacy) ───────────────────────────────────────────────────
+    var remote = {
+      app:              app,
+      shell:            shell,
+      nativeImage:      nativeImage,
+      clipboard:        clipboard,
+      getCurrentWindow: function () { return fakeWin; },
+      getGlobal:        function () { return undefined; },
+      require:          function () { return {}; },
+      BrowserWindow:    { fromId: function () { return fakeWin; } },
+      dialog: {
+        showMessageBox:  function () { return Promise.resolve({ response: 0 }); },
+        showOpenDialog:  function () { return Promise.resolve({ canceled: true, filePaths: [] }); },
+        showSaveDialog:  function () { return Promise.resolve({ canceled: true }); },
+      },
+    };
+
+    // ── Full electron module ───────────────────────────────────────────────
+    var electronModule = {
+      ipcRenderer:    ipcRenderer,
+      shell:          shell,
+      clipboard:      clipboard,
+      nativeImage:    nativeImage,
+      app:            app,
+      remote:         remote,
+      contextBridge:  { exposeInMainWorld: noop },
+      crashReporter:  { start: noop, getLastCrashReport: function () { return null; } },
+      desktopCapturer:{ getSources: function () { return Promise.resolve([]); } },
+      systemPreferences: {
+        isDarkMode:           function () { return window.matchMedia("(prefers-color-scheme: dark)").matches; },
+        getEffectiveAppearance: function () { return "dark"; },
+      },
+    };
+
+    // ── window.require ────────────────────────────────────────────────────
+    try {
+      if (!window.require) {
+        window.require = function (mod) {
+          if (mod === "electron") return electronModule;
+          var e = new Error("Cannot find module '" + mod + "'");
+          e.code = "MODULE_NOT_FOUND"; throw e;
+        };
+        window.require.resolve = function () { return ""; };
+      }
+    } catch (_) {}
+
+    // Some WhatsApp builds expose via contextBridge as window.electron
+    try { if (!window.electron) window.electron = electronModule; } catch (_) {}
+  })();
+
+  // ── UA spoof ───────────────────────────────────────────────────────────
+  // Read the real Chrome version BEFORE we override anything, then splice in
+  // WhatsApp/Electron tokens.  The HTTP request UA is untouched — server still
+  // sees the real Edge UA so it never serves the "Update Chrome" page.
+  try {
+    var _realUA = navigator.userAgent || "";
+    var _chrome = _realUA.match(/Chrome\/[\d.]+/);
+    if (_chrome) {
+      var _spoofUA =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+        "(KHTML, like Gecko) WhatsApp/2.2422.6 " + _chrome[0] +
+        " Electron/32.0.0 Safari/537.36";
+      var _uaDesc = { get: function () { return _spoofUA; }, configurable: true };
+      try { Object.defineProperty(navigator, "userAgent", _uaDesc); } catch (_) {}
+      try { Object.defineProperty(Navigator.prototype, "userAgent", _uaDesc); } catch (_) {}
+      var _avDesc = { get: function () { return _spoofUA.replace(/^Mozilla\//, ""); }, configurable: true };
+      try { Object.defineProperty(navigator, "appVersion", _avDesc); } catch (_) {}
+    }
+  } catch (_) {}
 
   // ── Rebrand ────────────────────────────────────────────────────────────
   function rebrand(text) {
