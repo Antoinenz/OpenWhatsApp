@@ -17,9 +17,10 @@ pub const INJECTION_SCRIPT: &str = r#"
   function rebrand(text) {
     if (typeof text !== "string" || text.length === 0) return text;
     let out = text.replace(/WhatsApp Web/gi, "OpenWhatsApp");
-    // A text node whose entire content is "WhatsApp" is the left-panel header
-    // title — rename it to "Chats" (cleaner than "OpenWhatsApp" there).
-    if (/^\s*WhatsApp\s*$/.test(out)) out = out.replace(/WhatsApp/, "Chats");
+    // Only rewrite a *standalone* "WhatsApp" so we don't break "WhatsApp Inc."
+    // NB: the left-panel header logo is rendered as an SVG, not text — that
+    // rename has to happen against the SVG itself, not here.
+    if (/^\s*WhatsApp\s*$/.test(out)) out = out.replace(/WhatsApp/, "OpenWhatsApp");
     return out;
   }
 
@@ -102,25 +103,10 @@ pub const INJECTION_SCRIPT: &str = r#"
 
   // ── Video call button hider ────────────────────────────────────────────
   // The in-chat video call button only opens an "install desktop app" prompt,
-  // so we remove it entirely.  We scope the search to <header> elements so we
-  // never accidentally hide video thumbnails inside message bubbles.
+  // so we remove it entirely.  WhatsApp Web tags it with aria-label="Video call".
   function hideVideoCallButton() {
-    document.querySelectorAll("header").forEach(function (h) {
-      ["video-call", "video"].forEach(function (icon) {
-        h.querySelectorAll('[data-icon="' + icon + '"]').forEach(function (el) {
-          // Walk up to the nearest button / role=button ancestor within the header.
-          let cur = el.parentElement;
-          for (let i = 0; i < 6 && cur && cur !== h.parentElement; i++) {
-            const tag = cur.tagName;
-            const role = cur.getAttribute && cur.getAttribute("role");
-            if (tag === "BUTTON" || tag === "A" || role === "button") {
-              cur.style.setProperty("display", "none", "important");
-              return;
-            }
-            cur = cur.parentElement;
-          }
-        });
-      });
+    document.querySelectorAll('button[aria-label="Video call"]').forEach(function (btn) {
+      btn.style.setProperty("display", "none", "important");
     });
   }
 
