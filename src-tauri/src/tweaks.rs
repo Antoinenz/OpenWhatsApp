@@ -9,7 +9,7 @@
 ///
 /// Chat-message contents and other user-generated text are explicitly skipped
 /// so we never mangle what a contact actually wrote.
-pub const INJECTION_SCRIPT: &str = r#"
+pub const INJECTION_SCRIPT: &str = r##"
 (function () {
   "use strict";
 
@@ -295,7 +295,7 @@ pub const INJECTION_SCRIPT: &str = r#"
     }
   }, true);  // capture so we beat WhatsApp's own handlers
 })();
-"#;
+"##;
 
 /// Extra injection only used in release builds.  Disables the WebView2 native
 /// right-click menu (Reload / Inspect / etc.) while leaving WhatsApp's own
