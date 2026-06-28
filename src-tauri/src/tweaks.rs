@@ -77,15 +77,15 @@ pub const INJECTION_SCRIPT: &str = r#"
   /**
    * Walk *up* from a node whose textContent matches a banner pattern, hiding
    * the smallest ancestor that fully encloses the banner *card* without
-   * spilling into siblings (other chats, etc.).
+   * spilling into siblings (other chats / messages).
    *
    * Stops climbing at:
    *   - the body / html root
    *   - a semantic container tag: <aside>, <main>, <nav>, <header>, <footer>
-   *   - a node with an ARIA role that bounds a region: navigation / main /
-   *     complementary / list / listbox
-   *   - a parent with many children (looks like a virtualised list)
-   *   - a parent whose textContent is suddenly very large (entered a wrapper)
+   *   - a node with an ARIA role that bounds a region
+   *   - a parent that contains real chat messages ([data-id] or [role="row"])
+   *   - a parent with more than 4 direct children (likely a list/feed)
+   *   - a parent whose textContent exceeds 400 chars (entered a content wrapper)
    *   - a parent that no longer matches any banner pattern at all
    *
    * Immediately returns at:
@@ -95,7 +95,7 @@ pub const INJECTION_SCRIPT: &str = r#"
   function findBannerRoot(el) {
     let cur = el;
     let best = el;
-    for (let i = 0; cur && cur.parentElement && i < 8; i++) {
+    for (let i = 0; cur && cur.parentElement && i < 6; i++) {
       const parent = cur.parentElement;
       if (parent === document.body || parent === document.documentElement) break;
 
@@ -113,14 +113,20 @@ pub const INJECTION_SCRIPT: &str = r#"
             role === "list" || role === "listbox" || role === "grid") break;
       } catch (_) {}
 
+      // If this parent contains real chat messages, stop — climbing further
+      // would hide message content along with the banner.
+      try {
+        if (parent.querySelector('[data-id], [role="row"]')) break;
+      } catch (_) {}
+
       // Parent must still carry banner-like text.
       if (!matchesBanner(parent.textContent || "")) break;
 
-      // Looks like a virtualised list (many sibling rows).
-      if (parent.children.length > 6) break;
+      // Looks like a feed or list — too many siblings to be a promo card.
+      if (parent.children.length > 4) break;
 
-      // Wrapper too big — we've definitely left the card.
-      if (trim(parent.textContent).length > 700) break;
+      // Wrapper too big — we've left the card and entered a content region.
+      if (trim(parent.textContent).length > 400) break;
 
       best = parent;
       cur = parent;
