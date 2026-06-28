@@ -7,21 +7,7 @@
     "frontendDist": "../src"
   },
   "app": {
-    "windows": [
-      {
-        "label": "main",
-        "title": "OpenWhatsApp",
-        "width": 1280,
-        "height": 800,
-        "minWidth": 800,
-        "minHeight": 600,
-        "resizable": true,
-        "fullscreen": false,
-        "visible": true,
-        "decorations": true,
-        "center": true
-      }
-    ]
+    "windows": []
   },
   "bundle": {
     "active": true,
