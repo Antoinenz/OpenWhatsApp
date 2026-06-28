@@ -3,9 +3,11 @@
   "version": "1.0.0",
   "description": "Lightweight WhatsApp client for Windows built with Tauri",
   "scripts": {
+    "postinstall": "node scripts/generate-icons.js",
+    "icons": "node scripts/generate-icons.js",
     "tauri": "tauri",
-    "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "dev": "tauri dev",
+    "build": "tauri build"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0"
