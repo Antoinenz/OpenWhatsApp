@@ -63,6 +63,15 @@ pub const INJECTION_SCRIPT: &str = r#"
     /\bcontinue\s+(on|in)\s+whatsapp\s+desktop\b/i,
     /\bswitch\s+to\s+whatsapp\s+desktop\b/i,
     /\bwhatsapp\s+for\s+windows\b/i,
+    // Broad catch-all: "WhatsApp Desktop" is only ever promotional copy.
+    /\bwhatsapp\s+desktop\b/i,
+    // In-chat upgrade prompts.
+    /\bfor\s+(a\s+)?better\s+experience\b/i,
+    /\bdownload\s+(the\s+)?app\b/i,
+    /\blink\s+with\s+phone\b/i,
+    /\buse\s+on\s+(your\s+)?desktop\b/i,
+    /\bopen\s+whatsapp\s+on\s+your\s+phone\b/i,
+    /\bfor\s+(voice|video)\s+(and\s+(video|audio)\s+)?calls?\b/i,
   ];
 
   function matchesBanner(text) {
@@ -230,8 +239,13 @@ pub const INJECTION_SCRIPT: &str = r#"
         childList: true, characterData: true, subtree: true,
       });
     }
-    // Safety net for SPA transitions that don't touch document.body directly.
-    setInterval(() => { rebrandTitle(); killInstallDialogs(document.body); }, 1500);
+    // Safety net for SPA transitions and CSS-toggled banners (display/visibility
+    // changes don't fire childList mutations, so we re-sweep on a timer too).
+    setInterval(() => {
+      sweepBanners(document.body);
+      killInstallDialogs(document.body);
+      rebrandTitle();
+    }, 1500);
   }
 
   if (document.readyState === "loading") {
