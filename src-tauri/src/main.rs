@@ -44,17 +44,14 @@ fn main() {
             .min_inner_size(800.0, 600.0)
             .decorations(true)
             .visible(true)
-            // Spoof a recent WhatsApp-Desktop (Electron) User-Agent so that
-            // WhatsApp Web exposes the desktop-only call flow instead of
-            // popping up the "install WhatsApp for Windows" upsell modal.
-            // Note: WhatsApp does run anti-spoof checks; this won't always
-            // unlock every feature, but it removes the most common gate.
-            .user_agent(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) \
-                 AppleWebKit/537.36 (KHTML, like Gecko) \
-                 WhatsApp/2.2422.6 Chrome/126.0.6478.127 \
-                 Electron/31.0.2 Safari/537.36",
-            )
+            // NB: we deliberately do *not* hard-code a User-Agent here.
+            // Doing so pinned a Chrome version into the HTTP header sent to
+            // WhatsApp's server, and that version goes stale → server starts
+            // returning an "Update Google Chrome" page. Instead we let the
+            // real, current WebView2/Edge UA flow over the wire, and we
+            // override `navigator.userAgent` *from JS* (see tweaks.rs) so the
+            // client-side desktop-app check still sees an Electron-flavoured
+            // UA based on the live Chrome version.
             // Persistent profile dir → cookies + IndexedDB survive restarts.
             .data_directory(data_dir)
             // Two scripts injected before any page script runs.
