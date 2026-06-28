@@ -144,50 +144,97 @@ pub const INJECTION_SCRIPT: &str = r##"
   }
 
   // ── Accent colour repainting ───────────────────────────────────────────
-  // Swap WhatsApp green out of every <style> element before the browser
-  // renders it, so there is no green flash.  WhatsApp Web uses CSS-in-JS and
-  // injects all its rules as <style> tags, so intercepting those is enough.
+  // Swap WhatsApp green out for the blue from the icon gradient midpoint.
+  // WhatsApp's CSS arrives in several waves and several forms:
   //
-  // Colour mapping (icon gradient midpoint replaces WhatsApp green):
+  //   1. Initial <style> tags injected at parse time
+  //   2. <style> tags added later by chunk loader / dark-mode swap
+  //   3. Existing <style> tags whose text content is rewritten in place
+  //   4. CSSOM rules updated via insertRule / replaceSync
+  //   5. CSS custom properties redefined at runtime via JS
+  //
+  // To cover all five we (a) patch <style> textContent, (b) observe
+  // childList + characterData mutations, (c) walk cssRules to rewrite CSS
+  // variable definitions, and (d) re-sweep every 2 s as a safety net.
+  //
+  // Colour mapping:
   //   #1daa61  primary green   → #4663c2  primary blue
   //   #00a884  dark-mode green → #4663c2
-  //   #1fdf6d  bright green    → #6882d4  lighter blue (hover / active tint)
+  //   #1fdf6d  bright green    → #6882d4  lighter hover/active tint
   //   #1ed97e  lighter accent  → #6882d4
   //   #0ded64  brightest green → #7b96df
-  //
-  // RGB / RGBA variants of the primary green are also rewritten so variables
-  // that use rgb(29,170,97) pick up the right value too.
   const ACCENT_PAIRS = [
-    [/#1daa61/gi,                           "#4663c2"],
-    [/#00a884/gi,                           "#4663c2"],
-    [/#1fdf6d/gi,                           "#6882d4"],
-    [/#1ed97e/gi,                           "#6882d4"],
-    [/#0ded64/gi,                           "#7b96df"],
-    [/rgb\(\s*29\s*,\s*170\s*,\s*97\s*\)/gi,   "rgb(70,99,194)"],
-    [/rgba\(\s*29\s*,\s*170\s*,\s*97\s*,/gi,   "rgba(70,99,194,"],
+    [/#1daa61/gi,                                "#4663c2"],
+    [/#00a884/gi,                                "#4663c2"],
+    [/#1fdf6d/gi,                                "#6882d4"],
+    [/#1ed97e/gi,                                "#6882d4"],
+    [/#0ded64/gi,                                "#7b96df"],
+    [/rgb\(\s*29\s*,\s*170\s*,\s*97\s*\)/gi,     "rgb(70,99,194)"],
+    [/rgba\(\s*29\s*,\s*170\s*,\s*97\s*,/gi,     "rgba(70,99,194,"],
   ];
-  function patchStyle(node) {
-    if (!node || node.nodeName !== "STYLE") return;
-    let t = node.textContent;
-    let dirty = false;
-    for (const [re, rep] of ACCENT_PAIRS) {
-      const next = t.replace(re, rep);
-      if (next !== t) { t = next; dirty = true; }
-    }
-    if (dirty) node.textContent = t;
+  function patchText(t) {
+    if (!t) return t;
+    let out = t;
+    for (const [re, rep] of ACCENT_PAIRS) out = out.replace(re, rep);
+    return out;
   }
-  // Run as early as possible — poll until documentElement exists, then start
-  // observing.  Using documentElement (rather than document.body) lets us
-  // catch <style> tags injected into <head> too, which is where WhatsApp
-  // tends to put them.
+  function patchStyleEl(el) {
+    if (!el || el.nodeName !== "STYLE") return;
+    const next = patchText(el.textContent);
+    if (next !== el.textContent) el.textContent = next;
+  }
+  // Walk a CSSRuleList recursively (handles @media, @supports, etc.) and
+  // rewrite CSS custom-property declarations whose value contains the green.
+  function walkCssRules(rules) {
+    if (!rules) return;
+    for (const rule of rules) {
+      if (rule.cssRules) walkCssRules(rule.cssRules);
+      const style = rule.style;
+      if (!style) continue;
+      for (let i = 0; i < style.length; i++) {
+        const prop = style[i];
+        const val = style.getPropertyValue(prop);
+        const next = patchText(val);
+        if (next !== val) {
+          style.setProperty(prop, next, style.getPropertyPriority(prop));
+        }
+      }
+    }
+  }
+  function repaintAccent() {
+    document.querySelectorAll("style").forEach(patchStyleEl);
+    for (const sheet of document.styleSheets) {
+      try { walkCssRules(sheet.cssRules); } catch (_) { /* cross-origin */ }
+    }
+    if (document.adoptedStyleSheets) {
+      for (const sheet of document.adoptedStyleSheets) {
+        try { walkCssRules(sheet.cssRules); } catch (_) {}
+      }
+    }
+  }
   function startAccentRepainter() {
     if (!document.documentElement) { setTimeout(startAccentRepainter, 10); return; }
-    document.querySelectorAll("style").forEach(patchStyle);
+    repaintAccent();
     new MutationObserver(function (mutations) {
-      for (const m of mutations)
-        for (const n of m.addedNodes)
-          patchStyle(n);
-    }).observe(document.documentElement, { childList: true, subtree: true });
+      let needsSweep = false;
+      for (const m of mutations) {
+        if (m.type === "childList") {
+          for (const n of m.addedNodes) {
+            if (n.nodeName === "STYLE") { patchStyleEl(n); needsSweep = true; }
+          }
+        } else if (m.type === "characterData") {
+          // Text inside an existing <style> was rewritten in place.
+          const p = m.target && m.target.parentNode;
+          if (p && p.nodeName === "STYLE") { patchStyleEl(p); needsSweep = true; }
+        }
+      }
+      if (needsSweep) repaintAccent();
+    }).observe(document.documentElement, {
+      childList: true, subtree: true, characterData: true,
+    });
+    // Safety-net re-sweep: catches CSS variables redefined via JS or rules
+    // mutated via insertRule/replaceSync (which don't fire DOM mutations).
+    setInterval(repaintAccent, 2000);
   }
   startAccentRepainter();
 
