@@ -144,7 +144,7 @@ pub const INJECTION_SCRIPT: &str = r##"
   }
 
   // ── Accent colour repainting ───────────────────────────────────────────
-  // Swaps WhatsApp green out of every <style> element before the browser
+  // Swap WhatsApp green out of every <style> element before the browser
   // renders it, so there is no green flash.  WhatsApp Web uses CSS-in-JS and
   // injects all its rules as <style> tags, so intercepting those is enough.
   //
@@ -157,41 +157,39 @@ pub const INJECTION_SCRIPT: &str = r##"
   //
   // RGB / RGBA variants of the primary green are also rewritten so variables
   // that use rgb(29,170,97) pick up the right value too.
-  (function () {
-    const PAIRS = [
-      [/#1daa61/gi,                           "#4663c2"],
-      [/#1DAA61/g,                            "#4663C2"],
-      [/#00a884/gi,                           "#4663c2"],
-      [/#1fdf6d/gi,                           "#6882d4"],
-      [/#1ed97e/gi,                           "#6882d4"],
-      [/#0ded64/gi,                           "#7b96df"],
-      [/rgb\(\s*29\s*,\s*170\s*,\s*97\s*\)/gi,   "rgb(70,99,194)"],
-      [/rgba\(\s*29\s*,\s*170\s*,\s*97\s*,/gi,   "rgba(70,99,194,"],
-    ];
-
-    function patchStyle(node) {
-      if (!node || node.nodeName !== "STYLE") return;
-      let t = node.textContent;
-      let dirty = false;
-      for (const [re, rep] of PAIRS) {
-        const next = t.replace(re, rep);
-        if (next !== t) { t = next; dirty = true; }
-      }
-      if (dirty) node.textContent = t;
+  const ACCENT_PAIRS = [
+    [/#1daa61/gi,                           "#4663c2"],
+    [/#00a884/gi,                           "#4663c2"],
+    [/#1fdf6d/gi,                           "#6882d4"],
+    [/#1ed97e/gi,                           "#6882d4"],
+    [/#0ded64/gi,                           "#7b96df"],
+    [/rgb\(\s*29\s*,\s*170\s*,\s*97\s*\)/gi,   "rgb(70,99,194)"],
+    [/rgba\(\s*29\s*,\s*170\s*,\s*97\s*,/gi,   "rgba(70,99,194,"],
+  ];
+  function patchStyle(node) {
+    if (!node || node.nodeName !== "STYLE") return;
+    let t = node.textContent;
+    let dirty = false;
+    for (const [re, rep] of ACCENT_PAIRS) {
+      const next = t.replace(re, rep);
+      if (next !== t) { t = next; dirty = true; }
     }
-
-    // Patch any <style> blocks already in the DOM (e.g. from SSR / preload).
+    if (dirty) node.textContent = t;
+  }
+  // Run as early as possible — poll until documentElement exists, then start
+  // observing.  Using documentElement (rather than document.body) lets us
+  // catch <style> tags injected into <head> too, which is where WhatsApp
+  // tends to put them.
+  function startAccentRepainter() {
+    if (!document.documentElement) { setTimeout(startAccentRepainter, 10); return; }
     document.querySelectorAll("style").forEach(patchStyle);
-
-    // Watch for new <style> elements injected by WhatsApp's chunk loader.
-    // We observe documentElement so we catch additions to both <head> and
-    // <body> without waiting for DOMContentLoaded.
     new MutationObserver(function (mutations) {
       for (const m of mutations)
         for (const n of m.addedNodes)
           patchStyle(n);
     }).observe(document.documentElement, { childList: true, subtree: true });
-  })();
+  }
+  startAccentRepainter();
 
   // ── Title rewrite (preserve "(3) " unread prefix) ──────────────────────
   function rebrandTitle() {
