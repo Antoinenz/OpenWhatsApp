@@ -30,7 +30,9 @@ jobs:
           workspaces: src-tauri
 
       - name: Install frontend dependencies
-        run: npm ci
+        # --ignore-scripts skips the postinstall icon-generation step (needs
+        # rsvg-convert which isn't on Windows runners); icons are pre-committed.
+        run: npm ci --ignore-scripts
 
       - name: Build and release
         uses: tauri-apps/tauri-action@v0

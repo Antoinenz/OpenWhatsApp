@@ -102,10 +102,12 @@ pub const INJECTION_SCRIPT: &str = r#"
   }
 
   // ── Video call button hider ────────────────────────────────────────────
-  // The in-chat video call button only opens an "install desktop app" prompt,
-  // so we remove it entirely.  WhatsApp Web tags it with aria-label="Video call".
+  // Both "Video call" and "Group video call" only open an "install desktop
+  // app" prompt, so we remove them entirely.
   function hideVideoCallButton() {
-    document.querySelectorAll('button[aria-label="Video call"]').forEach(function (btn) {
+    document.querySelectorAll(
+      'button[aria-label="Video call"], button[aria-label="Group video call"]'
+    ).forEach(function (btn) {
       btn.style.setProperty("display", "none", "important");
     });
   }
