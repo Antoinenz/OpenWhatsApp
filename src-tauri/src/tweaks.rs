@@ -1,14 +1,17 @@
 /// JS injected into web.whatsapp.com (in addition to the notification shim).
 ///
-///   1. Stubs the Electron runtime (window.require / window.process / window.electron)
-///      so WhatsApp Web's Electron code-path initialises cleanly inside WebView2.
-///   2. Spoofs navigator.userAgent to include WhatsApp/Electron tokens (preserving
-///      the real Chrome version so the server never shows "Update Chrome").
-///   3. Rebrands UI text "WhatsApp Web" / standalone "WhatsApp" → "OpenWhatsApp"
-///   4. Hides every flavour of "Download / Get / Install / Try WhatsApp Desktop"
+///   1. Stubs window.require('electron') so calling-related Electron APIs don't
+///      throw when WhatsApp Web tries to use them.  We deliberately do NOT stub
+///      window.process — setting process.versions.node tricks webpack bundles into
+///      requiring Node built-ins (crypto, path, …) which hits our stub's throw and
+///      hangs the loading screen.  Without the process stub WhatsApp initialises
+///      in normal browser mode (chats work); the Electron APIs are still available
+///      if the calling code path needs them.
+///   2. Rebrands UI text "WhatsApp Web" / standalone "WhatsApp" → "OpenWhatsApp"
+///   3. Hides every flavour of "Download / Get / Install / Try WhatsApp Desktop"
 ///      banner *including* the modal dialog that pops up when you click Call.
-///   5. Re-writes the document title (preserving unread counts like "(3) …")
-///   6. Adds keyboard shortcuts:
+///   4. Re-writes the document title (preserving unread counts like "(3) …")
+///   5. Adds keyboard shortcuts:
 ///        Ctrl+W → close the current chat (deselect)
 ///        Ctrl+Q → quit OpenWhatsApp
 ///
@@ -18,38 +21,16 @@ pub const INJECTION_SCRIPT: &str = r#"
 (function () {
   "use strict";
 
-  // ── Electron runtime stub ──────────────────────────────────────────────
-  // WhatsApp Web detects Electron via window.process.type === 'renderer' and
-  // window.require('electron').  We provide a complete-enough fake so the app
-  // initialises on the Electron code-path without crashing on missing APIs.
+  // ── Electron API stub ─────────────────────────────────────────────────
+  // We expose window.require('electron') so that any Electron-specific code
+  // WhatsApp runs (calling UI, shell.openExternal, etc.) gets safe no-ops
+  // rather than crashing.  Unknown modules return {} instead of throwing so
+  // we don't accidentally break webpack require() calls for other modules.
   //
-  // Key design choices:
-  //   • ipcRenderer: all channels are silent no-ops / resolved Promises.
-  //     WhatsApp's React router owns its own navigation state; IPC calls for
-  //     chat routing are side-effects (native title bar, etc.) — safe to drop.
-  //   • shell.openExternal → window.open (so external links still open)
-  //   • BrowserWindow.close → our quit_app Tauri command
-  //   • Everything else returns a neutral default.
+  // We intentionally skip stubbing window.process: defining process.versions.node
+  // causes webpack-bundled code to fork into Node.js paths (require('crypto') etc.)
+  // which then hits our stub and hangs initialisation.
   (function () {
-    // ── process ───────────────────────────────────────────────────────────
-    var chromeVer = (navigator.userAgent.match(/Chrome\/([\d.]+)/) || [])[1] || "120.0.0.0";
-    try {
-      if (!window.process || typeof window.process.type === "undefined") {
-        Object.defineProperty(window, "process", {
-          value: {
-            type:     "renderer",
-            platform: "win32",
-            versions: { electron: "32.0.0", chrome: chromeVer, node: "20.18.0" },
-            env:      {},
-            argv:     [],
-            execPath: "",
-            pid:      1,
-          },
-          writable: true, configurable: true,
-        });
-      }
-    } catch (_) {}
-
     // ── ipcRenderer ───────────────────────────────────────────────────────
     var _listeners = Object.create(null);
     var ipcRenderer = {
@@ -187,8 +168,9 @@ pub const INJECTION_SCRIPT: &str = r#"
       if (!window.require) {
         window.require = function (mod) {
           if (mod === "electron") return electronModule;
-          var e = new Error("Cannot find module '" + mod + "'");
-          e.code = "MODULE_NOT_FOUND"; throw e;
+          // Return an empty object for anything else (crypto, path, fs, …)
+          // so webpack-bundled code doesn't crash — it just gets no-ops.
+          return {};
         };
         window.require.resolve = function () { return ""; };
       }
@@ -197,26 +179,6 @@ pub const INJECTION_SCRIPT: &str = r#"
     // Some WhatsApp builds expose via contextBridge as window.electron
     try { if (!window.electron) window.electron = electronModule; } catch (_) {}
   })();
-
-  // ── UA spoof ───────────────────────────────────────────────────────────
-  // Read the real Chrome version BEFORE we override anything, then splice in
-  // WhatsApp/Electron tokens.  The HTTP request UA is untouched — server still
-  // sees the real Edge UA so it never serves the "Update Chrome" page.
-  try {
-    var _realUA = navigator.userAgent || "";
-    var _chrome = _realUA.match(/Chrome\/[\d.]+/);
-    if (_chrome) {
-      var _spoofUA =
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-        "(KHTML, like Gecko) WhatsApp/2.2422.6 " + _chrome[0] +
-        " Electron/32.0.0 Safari/537.36";
-      var _uaDesc = { get: function () { return _spoofUA; }, configurable: true };
-      try { Object.defineProperty(navigator, "userAgent", _uaDesc); } catch (_) {}
-      try { Object.defineProperty(Navigator.prototype, "userAgent", _uaDesc); } catch (_) {}
-      var _avDesc = { get: function () { return _spoofUA.replace(/^Mozilla\//, ""); }, configurable: true };
-      try { Object.defineProperty(navigator, "appVersion", _avDesc); } catch (_) {}
-    }
-  } catch (_) {}
 
   // ── Rebrand ────────────────────────────────────────────────────────────
   function rebrand(text) {
