@@ -113,15 +113,33 @@ pub const INJECTION_SCRIPT: &str = r#"
   }
 
   // ── Meta AI button hider ───────────────────────────────────────────────
-  // Removes the Meta AI entry from the sidebar / chat list — anything tagged
-  // with aria-label="Meta AI" is the brand button itself or its row wrapper.
+  // WhatsApp wraps the Meta AI button in several plain <div>s with no
+  // semantic roles, so closest('[role="listitem"]') doesn't reach the right
+  // level.  Instead we walk up until we find the first ancestor whose parent
+  // has multiple children — that ancestor is the "row" div in the nav list.
+  // We then hide it AND the preceding sibling (the flex-grow spacer that
+  // pushes bottom-nav items downward), which removes the hover ghost and gap.
   function hideMetaAI() {
     document.querySelectorAll('[aria-label="Meta AI"]').forEach(function (el) {
       el.style.setProperty("display", "none", "important");
-      // Also hide the surrounding list row if there is one, so we don't leave
-      // an empty slot at the top of the chat list.
-      let row = el.closest && el.closest('[role="listitem"], [role="row"], li');
-      if (row) row.style.setProperty("display", "none", "important");
+
+      // Climb up to the row-level container.
+      let row = null;
+      let cur = el.parentElement;
+      for (let i = 0; i < 12 && cur && cur.parentElement; i++) {
+        if (cur.parentElement.children.length >= 3) {
+          row = cur;
+          break;
+        }
+        cur = cur.parentElement;
+      }
+
+      if (row) {
+        row.style.setProperty("display", "none", "important");
+        // The flex-grow spacer immediately above the Meta AI row.
+        const spacer = row.previousElementSibling;
+        if (spacer) spacer.style.setProperty("display", "none", "important");
+      }
     });
   }
 
