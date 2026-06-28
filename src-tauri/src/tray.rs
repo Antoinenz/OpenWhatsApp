@@ -10,15 +10,14 @@ pub fn setup<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
     let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
 
-    TrayIconBuilder::new()
+    let mut builder = TrayIconBuilder::new()
         .menu(&menu)
         .tooltip("OpenWhatsApp")
-        // Use the bundled icon (see tauri.conf.json → bundle.icon).
-        .icon(app.default_window_icon().unwrap().clone())
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => {
                 if let Some(w) = app.get_webview_window("main") {
                     let _ = w.show();
+                    let _ = w.unminimize();
                     let _ = w.set_focus();
                 }
             }
@@ -36,11 +35,18 @@ pub fn setup<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
                 let app = tray.app_handle();
                 if let Some(w) = app.get_webview_window("main") {
                     let _ = w.show();
+                    let _ = w.unminimize();
                     let _ = w.set_focus();
                 }
             }
-        })
-        .build(app)?;
+        });
 
+    // Use the bundled window icon when available; otherwise the tray will use
+    // whatever Tauri provides as a fallback (so we never panic at startup).
+    if let Some(icon) = app.default_window_icon() {
+        builder = builder.icon(icon.clone());
+    }
+
+    builder.build(app)?;
     Ok(())
 }
