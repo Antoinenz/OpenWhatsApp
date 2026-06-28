@@ -63,15 +63,8 @@ pub const INJECTION_SCRIPT: &str = r#"
     /\bcontinue\s+(on|in)\s+whatsapp\s+desktop\b/i,
     /\bswitch\s+to\s+whatsapp\s+desktop\b/i,
     /\bwhatsapp\s+for\s+windows\b/i,
-    // Broad catch-all: "WhatsApp Desktop" is only ever promotional copy.
+    // "WhatsApp Desktop" on its own is only ever promotional copy.
     /\bwhatsapp\s+desktop\b/i,
-    // In-chat upgrade prompts.
-    /\bfor\s+(a\s+)?better\s+experience\b/i,
-    /\bdownload\s+(the\s+)?app\b/i,
-    /\blink\s+with\s+phone\b/i,
-    /\buse\s+on\s+(your\s+)?desktop\b/i,
-    /\bopen\s+whatsapp\s+on\s+your\s+phone\b/i,
-    /\bfor\s+(voice|video)\s+(and\s+(video|audio)\s+)?calls?\b/i,
   ];
 
   function matchesBanner(text) {
