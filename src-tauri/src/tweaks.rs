@@ -14,31 +14,6 @@ pub const INJECTION_SCRIPT: &str = r#"
 (function () {
   "use strict";
 
-  // ── Client-side UA spoof (best-effort "we're WhatsApp Desktop") ────────
-  // The HTTP UA is left alone (we want WhatsApp's server to see the real,
-  // current Chrome version so it never serves an "Update Chrome" page).
-  // Only the JS-visible navigator.userAgent is rewritten — we splice in
-  // WhatsApp/Electron tokens around the *live* Chrome version so the page
-  // never sees a stale version string.
-  try {
-    const realUA = navigator.userAgent || "";
-    const chrome = realUA.match(/Chrome\/[\d.]+/);
-    if (chrome) {
-      const spoofUA =
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-        "(KHTML, like Gecko) WhatsApp/2.2422.6 " + chrome[0] +
-        " Electron/32.0.0 Safari/537.36";
-      const desc = { get: function () { return spoofUA; }, configurable: true };
-      try { Object.defineProperty(navigator, "userAgent", desc); } catch (_) {}
-      try { Object.defineProperty(Navigator.prototype, "userAgent", desc); } catch (_) {}
-      const appVerDesc = {
-        get: function () { return spoofUA.replace(/^Mozilla\//, ""); },
-        configurable: true,
-      };
-      try { Object.defineProperty(navigator, "appVersion", appVerDesc); } catch (_) {}
-    }
-  } catch (_) {}
-
   // ── Rebrand ────────────────────────────────────────────────────────────
   function rebrand(text) {
     if (typeof text !== "string" || text.length === 0) return text;
