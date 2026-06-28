@@ -231,6 +231,7 @@ pub const INJECTION_SCRIPT: &str = r#"
 /// right-click menu (Reload / Inspect / etc.) while leaving WhatsApp's own
 /// JS-rendered context menus intact — they still fire on the same event, we
 /// just stop the browser's *default action* of showing the OS-level menu.
+#[allow(dead_code)] // referenced only in release builds via #[cfg(not(debug_assertions))]
 pub const PROD_INJECTION_SCRIPT: &str = r#"
 (function () {
   document.addEventListener("contextmenu", function (e) {
