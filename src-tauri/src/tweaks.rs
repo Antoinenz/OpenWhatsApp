@@ -110,6 +110,19 @@ pub const INJECTION_SCRIPT: &str = r#"
     });
   }
 
+  // ── Meta AI button hider ───────────────────────────────────────────────
+  // Removes the Meta AI entry from the sidebar / chat list — anything tagged
+  // with aria-label="Meta AI" is the brand button itself or its row wrapper.
+  function hideMetaAI() {
+    document.querySelectorAll('[aria-label="Meta AI"]').forEach(function (el) {
+      el.style.setProperty("display", "none", "important");
+      // Also hide the surrounding list row if there is one, so we don't leave
+      // an empty slot at the top of the chat list.
+      let row = el.closest && el.closest('[role="listitem"], [role="row"], li');
+      if (row) row.style.setProperty("display", "none", "important");
+    });
+  }
+
   // ── Title rewrite (preserve "(3) " unread prefix) ──────────────────────
   function rebrandTitle() {
     const t = document.title || "";
@@ -126,6 +139,7 @@ pub const INJECTION_SCRIPT: &str = r#"
     walkText(document.body);
     sweepBanners(document.body);
     hideVideoCallButton();
+    hideMetaAI();
     rebrandTitle();
 
     const mo = new MutationObserver((mutations) => {
@@ -135,6 +149,7 @@ pub const INJECTION_SCRIPT: &str = r#"
             walkText(added);
             if (!killIfBanner(added)) sweepBanners(added);
             hideVideoCallButton();
+            hideMetaAI();
           } else if (added.nodeType === Node.TEXT_NODE) {
             walkText(added);
           }
@@ -150,7 +165,11 @@ pub const INJECTION_SCRIPT: &str = r#"
         childList: true, characterData: true, subtree: true,
       });
     }
-    setInterval(function () { rebrandTitle(); hideVideoCallButton(); }, 2000);
+    setInterval(function () {
+      rebrandTitle();
+      hideVideoCallButton();
+      hideMetaAI();
+    }, 2000);
   }
 
   if (document.readyState === "loading") {
@@ -197,6 +216,25 @@ pub const INJECTION_SCRIPT: &str = r#"
       try { window.__TAURI_INTERNALS__.invoke("quit_app"); } catch (_) {}
       return;
     }
+
+    // Ctrl+P → swallow (no print dialog from a chat app).
+    if (k === "p") {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      return;
+    }
   }, true);  // capture so we beat WhatsApp's own handlers
+})();
+"#;
+
+/// Extra injection only used in release builds.  Disables the WebView2 native
+/// right-click menu (Reload / Inspect / etc.) while leaving WhatsApp's own
+/// JS-rendered context menus intact — they still fire on the same event, we
+/// just stop the browser's *default action* of showing the OS-level menu.
+pub const PROD_INJECTION_SCRIPT: &str = r#"
+(function () {
+  document.addEventListener("contextmenu", function (e) {
+    e.preventDefault();
+  }, false);
 })();
 "#;

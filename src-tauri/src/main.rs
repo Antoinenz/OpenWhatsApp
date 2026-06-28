@@ -61,6 +61,14 @@ fn main() {
             // during a resize doesn't flash white — that's the resize "jank".
             .background_color(Color(17, 27, 33, 255));
 
+            // Release-only: kill the WebView2 native right-click menu. We keep
+            // it in debug builds so we can still hit "Inspect" while iterating.
+            #[cfg(not(debug_assertions))]
+            {
+                window_builder =
+                    window_builder.initialization_script(tweaks::PROD_INJECTION_SCRIPT);
+            }
+
             // WebView2-specific perf hints (Windows-only API; cfg-gated to avoid
             // breaking Linux/macOS dev builds if anyone tries them).
             #[cfg(target_os = "windows")]
