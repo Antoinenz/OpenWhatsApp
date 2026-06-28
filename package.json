@@ -1,0 +1,16 @@
+{
+  "name": "openwhatsapp",
+  "version": "1.0.0",
+  "description": "Lightweight WhatsApp client for Windows built with Tauri",
+  "scripts": {
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.0.0"
+  }
+}
