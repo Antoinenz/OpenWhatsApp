@@ -6,8 +6,12 @@ mod session;
 mod tray;
 mod tweaks;
 
-use tauri::{utils::config::Color, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{image::Image, utils::config::Color, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_autostart::MacosLauncher;
+
+// Embed the 32 px icon at compile time so the tray always has the right image,
+// even in dev builds where the bundle icons aren't "installed" anywhere.
+const ICON_32: &[u8] = include_bytes!("../icons/32x32.png");
 
 fn main() {
     tauri::Builder::default()
@@ -44,6 +48,7 @@ fn main() {
             .min_inner_size(800.0, 600.0)
             .decorations(true)
             .visible(true)
+            .icon(Image::from_bytes(ICON_32).expect("bundled icon is valid"))?
             // NB: we deliberately do *not* hard-code a User-Agent here.
             // Doing so pinned a Chrome version into the HTTP header sent to
             // WhatsApp's server, and that version goes stale → server starts

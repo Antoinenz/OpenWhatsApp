@@ -1,4 +1,5 @@
 use tauri::{
+    image::Image,
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Manager, Runtime,
@@ -41,11 +42,11 @@ pub fn setup<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
             }
         });
 
-    // Use the bundled window icon when available; otherwise the tray will use
-    // whatever Tauri provides as a fallback (so we never panic at startup).
-    if let Some(icon) = app.default_window_icon() {
-        builder = builder.icon(icon.clone());
-    }
+    // Load the 32 px icon directly from the embedded bytes so the tray always
+    // shows the correct image regardless of build mode or install state.
+    const ICON_32: &[u8] = include_bytes!("../icons/32x32.png");
+    let icon = Image::from_bytes(ICON_32).expect("bundled tray icon is valid");
+    builder = builder.icon(icon);
 
     builder.build(app)?;
     Ok(())

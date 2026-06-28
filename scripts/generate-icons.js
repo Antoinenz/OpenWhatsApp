@@ -2,15 +2,21 @@
 /**
  * Generates all icon files required by Tauri from openwhatsapp.svg.
  *
- * Requires: ImageMagick (`convert`) — pre-installed on most Linux/macOS systems
- * and on GitHub Actions windows-latest via the pre-installed toolchain.
+ * Requires: rsvg-convert (librsvg) — available on Linux/macOS.
+ * Icons are pre-committed so Windows CI runners don't need this tool.
  *
- * Output: src-tauri/icons/{32x32.png, 128x128.png, 128x128@2x.png, icon.icns, icon.ico}
+ * Output:
+ *   src-tauri/icons/16x16.png
+ *   src-tauri/icons/32x32.png
+ *   src-tauri/icons/48x48.png
+ *   src-tauri/icons/128x128.png
+ *   src-tauri/icons/128x128@2x.png   (256 px)
+ *   src-tauri/icons/icon.icns
+ *   src-tauri/icons/icon.ico         (multi-size: 16, 32, 48, 256)
  */
 
 "use strict";
 const { execFileSync } = require("child_process");
-const zlib = require("zlib");
 const fs   = require("fs");
 const path = require("path");
 
@@ -18,39 +24,7 @@ const SVG = path.resolve(__dirname, "..", "openwhatsapp.svg");
 const OUT = path.resolve(__dirname, "..", "src-tauri", "icons");
 fs.mkdirSync(OUT, { recursive: true });
 
-// ── CRC-32 ────────────────────────────────────────────────────────────────────
-const CRC_TABLE = (() => {
-  const t = new Uint32Array(256);
-  for (let n = 0; n < 256; n++) {
-    let c = n;
-    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-    t[n] = c;
-  }
-  return t;
-})();
-function crc32(buf) {
-  let c = 0xffffffff;
-  for (let i = 0; i < buf.length; i++)
-    c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
-  return (c ^ 0xffffffff) >>> 0;
-}
-
-// ── ICO builder (embeds a PNG directly — valid since Vista) ──────────────────
-function buildICO(pngBuf) {
-  const dir   = Buffer.allocUnsafe(6);
-  dir.writeUInt16LE(0, 0); dir.writeUInt16LE(1, 2); dir.writeUInt16LE(1, 4);
-
-  const entry = Buffer.allocUnsafe(16);
-  entry[0] = 32; entry[1] = 32; entry[2] = 0; entry[3] = 0;
-  entry.writeUInt16LE(1, 4);
-  entry.writeUInt16LE(32, 6);
-  entry.writeUInt32LE(pngBuf.length, 8);
-  entry.writeUInt32LE(22, 12);
-
-  return Buffer.concat([dir, entry, pngBuf]);
-}
-
-// ── Rasterise SVG → PNG via rsvg-convert (handles gradients correctly) ───────
+// ── Rasterise SVG → PNG via rsvg-convert ─────────────────────────────────────
 function rasterise(sizePx, outFile) {
   execFileSync("rsvg-convert", [
     "--width",  String(sizePx),
@@ -60,21 +34,67 @@ function rasterise(sizePx, outFile) {
   ]);
 }
 
-// ── Generate PNGs ─────────────────────────────────────────────────────────────
+// ── Generate all PNG sizes ────────────────────────────────────────────────────
 const SIZES = [
+  { file: "16x16.png",      px: 16  },
   { file: "32x32.png",      px: 32  },
+  { file: "48x48.png",      px: 48  },
   { file: "128x128.png",    px: 128 },
   { file: "128x128@2x.png", px: 256 },
 ];
 
+const pngCache = {};
 for (const { file, px } of SIZES) {
   const dest = path.join(OUT, file);
   rasterise(px, dest);
+  pngCache[px] = fs.readFileSync(dest);
   console.log(`  ✓ icons/${file}`);
 }
 
-// ── icon.icns (macOS) — wrap the 256 px PNG in a minimal ICNS shell ──────────
-const png256   = fs.readFileSync(path.join(OUT, "128x128@2x.png"));
+// ── icon.ico — multi-size ICO (16, 32, 48, 256 px embedded as PNGs) ──────────
+// Each entry is a PNG blob directly (valid since Windows Vista).
+function buildMultiICO(entries) {
+  const count = entries.length;
+  // ICONDIR header (6 bytes) + ICONDIRENTRY × count (16 bytes each)
+  const headerSize = 6 + count * 16;
+
+  const dir = Buffer.allocUnsafe(6);
+  dir.writeUInt16LE(0, 0);     // reserved
+  dir.writeUInt16LE(1, 2);     // type: icon
+  dir.writeUInt16LE(count, 4); // image count
+
+  const entryBufs = [];
+  let offset = headerSize;
+
+  for (const { px, png } of entries) {
+    const entry = Buffer.allocUnsafe(16);
+    // Width/height: 0 means 256 in the ICO spec
+    entry[0] = px >= 256 ? 0 : px;
+    entry[1] = px >= 256 ? 0 : px;
+    entry[2] = 0;   // colour count
+    entry[3] = 0;   // reserved
+    entry.writeUInt16LE(1,  4);           // planes
+    entry.writeUInt16LE(32, 6);           // bits per pixel
+    entry.writeUInt32LE(png.length,  8);  // data size
+    entry.writeUInt32LE(offset,     12);  // data offset
+    entryBufs.push(entry);
+    offset += png.length;
+  }
+
+  return Buffer.concat([dir, ...entryBufs, ...entries.map(e => e.png)]);
+}
+
+const icoEntries = [
+  { px: 16,  png: pngCache[16]  },
+  { px: 32,  png: pngCache[32]  },
+  { px: 48,  png: pngCache[48]  },
+  { px: 256, png: pngCache[256] },
+];
+fs.writeFileSync(path.join(OUT, "icon.ico"), buildMultiICO(icoEntries));
+console.log("  ✓ icons/icon.ico  (16, 32, 48, 256 px)");
+
+// ── icon.icns — macOS: wrap 256 px PNG in a minimal ICNS shell ───────────────
+const png256 = pngCache[256];
 const icnsChunkType = Buffer.from("ic08");
 const icnsChunkLen  = Buffer.allocUnsafe(4);
 icnsChunkLen.writeUInt32BE(8 + png256.length, 0);
@@ -86,10 +106,5 @@ fs.writeFileSync(
   Buffer.concat([icnsMagic, icnsTotalLen, icnsChunkType, icnsChunkLen, png256])
 );
 console.log("  ✓ icons/icon.icns");
-
-// ── icon.ico (Windows) — embed the 32 px PNG ─────────────────────────────────
-const png32 = fs.readFileSync(path.join(OUT, "32x32.png"));
-fs.writeFileSync(path.join(OUT, "icon.ico"), buildICO(png32));
-console.log("  ✓ icons/icon.ico");
 
 console.log("\nIcons ready.");
