@@ -49,6 +49,9 @@ fn main() {
             .decorations(true)
             .visible(true)
             .icon(Image::from_bytes(ICON_32).expect("bundled icon is valid"))?
+            // Let OS file-drag-and-drop events reach WhatsApp Web directly
+            // instead of being intercepted by Tauri's own file-drop handler.
+            .file_drop_enabled(false)
             // NB: we deliberately do *not* hard-code a User-Agent here.
             // Doing so pinned a Chrome version into the HTTP header sent to
             // WhatsApp's server, and that version goes stale → server starts

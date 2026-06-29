@@ -164,13 +164,13 @@ pub const INJECTION_SCRIPT: &str = r##"
   //   #1ed97e  lighter accent  → #6882d4
   //   #0ded64  brightest green → #7b96df
   const ACCENT_PAIRS = [
-    [/#1daa61/gi,                                "#4663c2"],
-    [/#00a884/gi,                                "#4663c2"],
-    [/#1fdf6d/gi,                                "#6882d4"],
-    [/#1ed97e/gi,                                "#6882d4"],
-    [/#0ded64/gi,                                "#7b96df"],
-    [/rgb\(\s*29\s*,\s*170\s*,\s*97\s*\)/gi,     "rgb(70,99,194)"],
-    [/rgba\(\s*29\s*,\s*170\s*,\s*97\s*,/gi,     "rgba(70,99,194,"],
+    [/#1daa61/gi,                            "#4663c2"],
+    [/#00a884/gi,                            "#4663c2"],
+    [/#1fdf6d/gi,                            "#6882d4"],
+    [/#1ed97e/gi,                            "#6882d4"],
+    [/#0ded64/gi,                            "#7b96df"],
+    [/rgb\(\s*29\s*,\s*170\s*,\s*97\s*\)/gi, "rgb(70,99,194)"],
+    [/rgba\(\s*29\s*,\s*170\s*,\s*97\s*,/gi, "rgba(70,99,194,"],
   ];
   function patchText(t) {
     if (!t) return t;
@@ -178,33 +178,65 @@ pub const INJECTION_SCRIPT: &str = r##"
     for (const [re, rep] of ACCENT_PAIRS) out = out.replace(re, rep);
     return out;
   }
+
+  // ── Hook CSSStyleDeclaration.setProperty ───────────────────────────────
+  // WhatsApp's theme engine sets CSS variables by calling
+  //   document.documentElement.style.setProperty('--token', '#1daa61')
+  // These are INLINE styles on <html> — invisible to stylesheet walking and
+  // to MutationObserver unless you observe the "style" attribute.  Hooking
+  // the prototype means every assignment goes through our filter first,
+  // regardless of which element or which stylesheet it targets.
+  (function () {
+    const orig = CSSStyleDeclaration.prototype.setProperty;
+    CSSStyleDeclaration.prototype.setProperty = function (prop, val, priority) {
+      orig.call(this, prop, patchText(String(val === undefined ? "" : val)),
+                priority === undefined ? "" : priority);
+    };
+  })();
+
   function patchStyleEl(el) {
     if (!el || el.nodeName !== "STYLE") return;
     const next = patchText(el.textContent);
     if (next !== el.textContent) el.textContent = next;
   }
-  // Walk a CSSRuleList recursively (handles @media, @supports, etc.) and
-  // rewrite CSS custom-property declarations whose value contains the green.
+  // Patch an element's inline style properties directly (for cases already
+  // set before our hook was in place).
+  function patchInlineStyle(el) {
+    if (!el || !el.style) return;
+    // Iterate backwards — length can shrink if we remove a property.
+    for (let i = el.style.length - 1; i >= 0; i--) {
+      const prop = el.style[i];
+      const val  = el.style.getPropertyValue(prop);
+      const next = patchText(val);
+      if (next !== val)
+        el.style.setProperty(prop, next, el.style.getPropertyPriority(prop));
+    }
+  }
+  // Walk a CSSRuleList recursively and rewrite CSS-variable values.
   function walkCssRules(rules) {
     if (!rules) return;
     for (const rule of rules) {
       if (rule.cssRules) walkCssRules(rule.cssRules);
-      const style = rule.style;
-      if (!style) continue;
-      for (let i = 0; i < style.length; i++) {
-        const prop = style[i];
-        const val = style.getPropertyValue(prop);
+      const s = rule.style;
+      if (!s) continue;
+      for (let i = 0; i < s.length; i++) {
+        const prop = s[i];
+        const val  = s.getPropertyValue(prop);
         const next = patchText(val);
-        if (next !== val) {
-          style.setProperty(prop, next, style.getPropertyPriority(prop));
-        }
+        if (next !== val) s.setProperty(prop, next, s.getPropertyPriority(prop));
       }
     }
   }
   function repaintAccent() {
+    // 1. Re-patch all <style> text content.
     document.querySelectorAll("style").forEach(patchStyleEl);
+    // 2. Re-patch inline styles on root elements (catches anything set before
+    //    our hook was installed, or any path that bypasses the prototype).
+    patchInlineStyle(document.documentElement);
+    patchInlineStyle(document.body);
+    // 3. Walk stylesheet rules (CSS variable values in cssRules).
     for (const sheet of document.styleSheets) {
-      try { walkCssRules(sheet.cssRules); } catch (_) { /* cross-origin */ }
+      try { walkCssRules(sheet.cssRules); } catch (_) {}
     }
     if (document.adoptedStyleSheets) {
       for (const sheet of document.adoptedStyleSheets) {
@@ -223,17 +255,21 @@ pub const INJECTION_SCRIPT: &str = r##"
             if (n.nodeName === "STYLE") { patchStyleEl(n); needsSweep = true; }
           }
         } else if (m.type === "characterData") {
-          // Text inside an existing <style> was rewritten in place.
           const p = m.target && m.target.parentNode;
           if (p && p.nodeName === "STYLE") { patchStyleEl(p); needsSweep = true; }
+        } else if (m.type === "attributes") {
+          // The "style" attribute on a root element changed — re-patch it.
+          patchInlineStyle(m.target);
+          needsSweep = true;
         }
       }
       if (needsSweep) repaintAccent();
     }).observe(document.documentElement, {
       childList: true, subtree: true, characterData: true,
+      attributes: true, attributeFilter: ["style"],
     });
-    // Safety-net re-sweep: catches CSS variables redefined via JS or rules
-    // mutated via insertRule/replaceSync (which don't fire DOM mutations).
+    // Safety-net: catch anything insertRule/replaceSync sets without firing
+    // a DOM mutation (runs every 2 s after the app is fully loaded).
     setInterval(repaintAccent, 2000);
   }
   startAccentRepainter();
