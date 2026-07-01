@@ -274,6 +274,40 @@ pub const INJECTION_SCRIPT: &str = r##"
   }
   startAccentRepainter();
 
+  // ── External link opening ───────────────────────────────────────────────
+  // WhatsApp Web renders links either as <a target="_blank" href="...">, or
+  // opens them via window.open(url). Neither does anything useful inside a
+  // Tauri/WebView2 window by default — there's no "system browser" fallback
+  // for a WebView2 popup request, so clicks on links silently did nothing.
+  // Route both paths through the opener plugin so links open in the user's
+  // actual default browser instead.
+  function openExternal(url) {
+    if (!url) return;
+    try {
+      window.__TAURI_INTERNALS__.invoke("plugin:opener|open_url", {
+        url: String(url),
+      });
+    } catch (_) { /* ignore */ }
+  }
+
+  document.addEventListener("click", function (e) {
+    const a = e.target && e.target.closest && e.target.closest("a[href]");
+    if (!a) return;
+    const href = a.getAttribute("href") || "";
+    // Only intercept real external links — leave mailto:, tel:, javascript:,
+    // and in-page "#anchor" links alone.
+    if (!/^https?:\/\//i.test(href)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    openExternal(href);
+  }, true);
+
+  const _origWindowOpen = window.open;
+  window.open = function (url) {
+    if (url) { openExternal(url); return null; }
+    return _origWindowOpen ? _origWindowOpen.apply(window, arguments) : null;
+  };
+
   // ── Title rewrite (preserve "(3) " unread prefix) ──────────────────────
   function rebrandTitle() {
     const t = document.title || "";

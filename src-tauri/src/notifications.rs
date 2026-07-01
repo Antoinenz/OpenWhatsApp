@@ -1,3 +1,5 @@
+// Only needed on the non-Windows fallback path further down.
+#[cfg(not(target_os = "windows"))]
 use tauri_plugin_notification::NotificationExt;
 
 /// JavaScript injected into *every* page the WebView loads (including
@@ -87,7 +89,22 @@ pub const INJECTION_SCRIPT: &str = r#"
 "#;
 
 /// Receives a notification from the JS shim and fires it as a native Windows
-/// toast via tauri-plugin-notification.
+/// toast.
+///
+/// On Windows we bypass tauri-plugin-notification's high-level `.show()` and
+/// call `notify-rust` directly.  The plugin always sets our own app
+/// identifier as the toast's AppUserModelID (AUMID) and fires it from a
+/// spawned task whose Result is discarded — so if that AUMID isn't
+/// registered on this machine (e.g. a missing/broken Start Menu shortcut, or
+/// the exe run from a portable/unregistered location), the toast silently
+/// vanishes with zero indication anywhere, and our JS-side fallback never
+/// engages because the plugin reports success regardless.
+///
+/// Here we try our own AUMID first (shows "OpenWhatsApp" as the sender), and
+/// if that fails, immediately retry with no AUMID at all — notify-rust then
+/// falls back to the PowerShell AUMID, which ships pre-registered on every
+/// Windows 10/11 install, guaranteeing the toast actually appears (just with
+/// a generic sender name) instead of disappearing outright.
 #[tauri::command]
 pub fn send_notification(
     app: tauri::AppHandle,
@@ -96,11 +113,38 @@ pub fn send_notification(
     icon: String,
 ) -> Result<(), String> {
     let _ = icon; // reserved for future use (download & cache the avatar)
-    app.notification()
-        .builder()
-        .title(title)
-        .body(body)
-        .show()
-        .map(|_| ())
-        .map_err(|e| format!("notification error: {e}"))
+
+    #[cfg(target_os = "windows")]
+    {
+        use notify_rust::Notification as WinToast;
+
+        let identifier = tauri::Manager::config(&app).identifier.clone();
+        if WinToast::new()
+            .summary(&title)
+            .body(&body)
+            .app_id(&identifier)
+            .show()
+            .is_ok()
+        {
+            return Ok(());
+        }
+
+        return WinToast::new()
+            .summary(&title)
+            .body(&body)
+            .show()
+            .map(|_| ())
+            .map_err(|e| format!("notification error: {e}"));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        app.notification()
+            .builder()
+            .title(title)
+            .body(body)
+            .show()
+            .map(|_| ())
+            .map_err(|e| format!("notification error: {e}"))
+    }
 }

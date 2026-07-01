@@ -42,8 +42,23 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: OpenWhatsApp ${{ github.ref_name }}
           releaseBody: |
-            ## What's new
-            See [CHANGELOG](https://github.com/Antoinenz/openwhatsapp/commits/main) for full details.
+            ## What's new in 0.1.2
+
+            - **Links now open** – clicking a link in a chat (or anything
+              that calls `window.open`) launches it in your default browser
+              instead of doing nothing.
+            - **Drag-and-drop file uploads fixed** – dragging a file onto a
+              chat now reaches WhatsApp's upload handler instead of being
+              swallowed by the window.
+            - **Notifications made more reliable** – toast notifications now
+              retry with a guaranteed-registered fallback identity if
+              OpenWhatsApp's own isn't recognised on your machine, instead of
+              silently failing with no toast and no error.
+            - **Accent colour is blue everywhere** – WhatsApp's green is now
+              replaced with the icon's blue across every place it could hide
+              (stylesheets, inline styles, CSS variables set at runtime).
+
+            See the [full commit history](https://github.com/Antoinenz/openwhatsapp/commits/main) for details.
 
             ## Installation
             Download **OpenWhatsApp_${{ github.ref_name }}_x64-setup.exe** below and run it.

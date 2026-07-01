@@ -28,6 +28,9 @@ fn main() {
             MacosLauncher::LaunchAgent,
             None,
         ))
+        // Lets links clicked inside WhatsApp Web open in the user's default
+        // browser instead of doing nothing (see tweaks.rs for the JS side).
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             // ── Persistent WebView2 profile (the "stays logged in" trick) ─────
             let data_dir = session::profile_dir(app.handle());
