@@ -268,9 +268,18 @@ pub const INJECTION_SCRIPT: &str = r##"
       childList: true, subtree: true, characterData: true,
       attributes: true, attributeFilter: ["style"],
     });
-    // Safety-net: catch anything insertRule/replaceSync sets without firing
-    // a DOM mutation (runs every 2 s after the app is fully loaded).
-    setInterval(repaintAccent, 2000);
+    // Safety-net: catches anything insertRule/replaceSync sets without firing
+    // a DOM mutation. Only relevant while WhatsApp's async chunks are still
+    // loading in — once the app has settled there's nothing left to sweep,
+    // so we stop after 30 s rather than walking every CSS rule in the page
+    // forever. (This is a background chat app; an unbounded interval doing a
+    // full stylesheet walk every 2 s indefinitely is exactly the kind of
+    // always-on-tab CPU drain we're trying to avoid vs. Electron.)
+    let sweepsRemaining = 15;
+    const safetyNet = setInterval(function () {
+      repaintAccent();
+      if (--sweepsRemaining <= 0) clearInterval(safetyNet);
+    }, 2000);
   }
   startAccentRepainter();
 
@@ -368,11 +377,15 @@ pub const INJECTION_SCRIPT: &str = r##"
         childList: true, characterData: true, subtree: true,
       });
     }
-    setInterval(function () {
-      rebrandTitle();
-      hideVideoCallButton();
-      hideMetaAI();
-    }, 2000);
+    // Note: hideVideoCallButton()/hideMetaAI() are deliberately NOT re-run on
+    // a timer here — the MutationObserver above already calls both on every
+    // added element, which fires far more often (and more responsively)
+    // than any polling interval could during normal chat use. A periodic
+    // safety net remains only for rebrandTitle(), since document.title can
+    // in principle change without a DOM mutation. Same reasoning as the
+    // capped accent-repaint safety net above: don't spend CPU forever
+    // re-checking things a MutationObserver already covers.
+    setInterval(rebrandTitle, 2000);
   }
 
   if (document.readyState === "loading") {
