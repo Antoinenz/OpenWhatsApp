@@ -13,6 +13,7 @@
  *   src-tauri/icons/128x128@2x.png   (256 px)
  *   src-tauri/icons/icon.icns
  *   src-tauri/icons/icon.ico         (multi-size: 16, 32, 48, 256)
+ *   src-tauri/icons/badge-dot.png    (taskbar unread-indicator overlay icon)
  */
 
 "use strict";
@@ -106,5 +107,25 @@ fs.writeFileSync(
   Buffer.concat([icnsMagic, icnsTotalLen, icnsChunkType, icnsChunkLen, png256])
 );
 console.log("  ✓ icons/icon.icns");
+
+// ── badge-dot.png — small red dot used as a Windows taskbar overlay icon ─────
+// Shown via Window::set_overlay_icon() whenever WhatsApp reports unread
+// messages, cleared (None) otherwise. A plain dot rather than a rendered
+// digit — keeps this script dependency-free (no font/text rasterisation)
+// while still giving the same "you have something waiting" signal every
+// other chat app shows on its taskbar icon.
+const badgeSvg = `<svg width="64" height="64" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+  <circle cx="32" cy="32" r="28" fill="#FF3B30" stroke="#FFFFFF" stroke-width="4"/>
+</svg>`;
+const badgeSvgPath = path.join(OUT, "_badge-dot-source.svg");
+fs.writeFileSync(badgeSvgPath, badgeSvg);
+execFileSync("rsvg-convert", [
+  "--width", "32",
+  "--height", "32",
+  "--output", path.join(OUT, "badge-dot.png"),
+  badgeSvgPath,
+]);
+fs.unlinkSync(badgeSvgPath);
+console.log("  ✓ icons/badge-dot.png");
 
 console.log("\nIcons ready.");

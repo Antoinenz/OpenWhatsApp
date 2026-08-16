@@ -315,6 +315,24 @@ pub const INJECTION_SCRIPT: &str = r##"
     if (/^\s*WhatsApp\s*$/.test(n)) n = "OpenWhatsApp";
     n = n.replace(/(\(\d+\)\s*)WhatsApp(?!\w)/g, "$1OpenWhatsApp");
     if (n !== t) document.title = n;
+    updateUnreadBadge(n);
+  }
+
+  // ── Taskbar unread badge ────────────────────────────────────────────────
+  // WhatsApp Web prefixes the tab title with "(N) " whenever there are
+  // unread messages — that's the same signal the browser tab favicon badge
+  // uses. We mirror it onto the taskbar icon via a native overlay dot so
+  // unread state is visible without alt-tabbing back, matching Slack/Discord.
+  // Only call into Rust when the boolean actually flips, not on every title
+  // mutation (title changes far more often than the unread state itself).
+  let _lastUnreadBadgeState = null;
+  function updateUnreadBadge(title) {
+    const hasUnread = /^\(\d+\)/.test(title);
+    if (hasUnread === _lastUnreadBadgeState) return;
+    _lastUnreadBadgeState = hasUnread;
+    try {
+      window.__TAURI_INTERNALS__.invoke("set_unread_badge", { hasUnread: hasUnread });
+    } catch (_) { /* ignore */ }
   }
 
   // ── Boot ───────────────────────────────────────────────────────────────

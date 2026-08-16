@@ -42,21 +42,30 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: OpenWhatsApp ${{ github.ref_name }}
           releaseBody: |
-            ## What's new in 0.1.2
+            ## What's new in 0.1.3
 
-            - **Links now open** – clicking a link in a chat (or anything
-              that calls `window.open`) launches it in your default browser
-              instead of doing nothing.
-            - **Drag-and-drop file uploads fixed** – dragging a file onto a
-              chat now reaches WhatsApp's upload handler instead of being
-              swallowed by the window.
-            - **Notifications made more reliable** – toast notifications now
-              retry with a guaranteed-registered fallback identity if
-              OpenWhatsApp's own isn't recognised on your machine, instead of
-              silently failing with no toast and no error.
-            - **Accent colour is blue everywhere** – WhatsApp's green is now
-              replaced with the icon's blue across every place it could hide
-              (stylesheets, inline styles, CSS variables set at runtime).
+            **Performance / reliability**
+            - Messages and notifications no longer lag after the window has
+              been minimized to the tray for a while — Chromium's background
+              timer throttling (the thing that made hidden browser tabs go
+              quiet) is now disabled specifically for this window, the same
+              fix Slack/Discord ship.
+
+            **Feels more native**
+            - Notifications are now clickable — clicking a toast (not just
+              dismissing it) brings OpenWhatsApp to the foreground.
+            - A small red dot now appears on the taskbar icon when you have
+              unread messages, mirroring the "(N)" badge WhatsApp already
+              puts in the window title.
+            - Window size, position, and maximized state are now remembered
+              across restarts instead of always reopening at a fixed size.
+            - Ctrl+= / Ctrl+- / Ctrl+0 now zoom the page in/out/reset, like
+              every browser and most desktop apps.
+            - Copying images and pasting from the clipboard now goes through
+              the full Clipboard API, not just plain text.
+            - Added a "Start with Windows" toggle to the tray menu.
+            - Turned off Edge's autofill dropdown, which looked out of place
+              popping up over a dedicated chat client.
 
             See the [full commit history](https://github.com/Antoinenz/openwhatsapp/commits/main) for details.
 

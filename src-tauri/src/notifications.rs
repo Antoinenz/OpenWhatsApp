@@ -2,6 +2,10 @@
 #[cfg(not(target_os = "windows"))]
 use tauri_plugin_notification::NotificationExt;
 
+// Needed on Windows for AppHandle::config() and ::get_webview_window().
+#[cfg(target_os = "windows")]
+use tauri::Manager;
+
 /// JavaScript injected into *every* page the WebView loads (including
 /// web.whatsapp.com).  It intercepts both browser- and service-worker-level
 /// notifications and tunnels them through Tauri IPC to `send_notification`
@@ -88,6 +92,53 @@ pub const INJECTION_SCRIPT: &str = r#"
 })();
 "#;
 
+/// Shows a native Windows toast via `notify-rust` directly and wires up
+/// click-to-focus: if the user actually interacts with the toast (clicks the
+/// body or an action button) we bring OpenWhatsApp to the foreground, matching
+/// how every other chat app's notifications behave. Merely dismissing the
+/// toast or letting it expire does *not* focus the window — only a genuine
+/// click does, since `NotificationResponse::Closed` is handled separately
+/// from `Default`/`Action` in the match below.
+#[cfg(target_os = "windows")]
+fn show_toast_with_click_to_focus(
+    app: &tauri::AppHandle,
+    title: &str,
+    body: &str,
+    app_id: Option<&str>,
+) -> Result<(), String> {
+    use notify_rust::{Notification as WinToast, NotificationResponse};
+
+    let mut toast = WinToast::new();
+    toast.summary(title).body(body);
+    if let Some(id) = app_id {
+        toast.app_id(id);
+    }
+
+    let handle = toast.show().map_err(|e| format!("notification error: {e}"))?;
+
+    // wait_for_response blocks on a std::mpsc::Receiver, so it needs its own
+    // thread — the IPC-handling thread this command runs on must return
+    // immediately or every subsequent JS→Rust call would stall behind it.
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let _ = handle.wait_for_response(move |response: &NotificationResponse| {
+            let clicked = matches!(
+                response,
+                NotificationResponse::Default | NotificationResponse::Action(_)
+            );
+            if clicked {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.show();
+                    let _ = w.unminimize();
+                    let _ = w.set_focus();
+                }
+            }
+        });
+    });
+
+    Ok(())
+}
+
 /// Receives a notification from the JS shim and fires it as a native Windows
 /// toast.
 ///
@@ -98,10 +149,11 @@ pub const INJECTION_SCRIPT: &str = r#"
 /// registered on this machine (e.g. a missing/broken Start Menu shortcut, or
 /// the exe run from a portable/unregistered location), the toast silently
 /// vanishes with zero indication anywhere, and our JS-side fallback never
-/// engages because the plugin reports success regardless.
+/// engages because the plugin reports success regardless. Bypassing it also
+/// lets us wire up click-to-focus, which the plugin doesn't expose at all.
 ///
-/// Here we try our own AUMID first (shows "OpenWhatsApp" as the sender), and
-/// if that fails, immediately retry with no AUMID at all — notify-rust then
+/// We try our own AUMID first (shows "OpenWhatsApp" as the sender), and if
+/// that fails, immediately retry with no AUMID at all — notify-rust then
 /// falls back to the PowerShell AUMID, which ships pre-registered on every
 /// Windows 10/11 install, guaranteeing the toast actually appears (just with
 /// a generic sender name) instead of disappearing outright.
@@ -116,25 +168,11 @@ pub fn send_notification(
 
     #[cfg(target_os = "windows")]
     {
-        use notify_rust::Notification as WinToast;
-
-        let identifier = tauri::Manager::config(&app).identifier.clone();
-        if WinToast::new()
-            .summary(&title)
-            .body(&body)
-            .app_id(&identifier)
-            .show()
-            .is_ok()
-        {
+        let identifier = app.config().identifier.clone();
+        if show_toast_with_click_to_focus(&app, &title, &body, Some(&identifier)).is_ok() {
             return Ok(());
         }
-
-        return WinToast::new()
-            .summary(&title)
-            .body(&body)
-            .show()
-            .map(|_| ())
-            .map_err(|e| format!("notification error: {e}"));
+        return show_toast_with_click_to_focus(&app, &title, &body, None);
     }
 
     #[cfg(not(target_os = "windows"))]

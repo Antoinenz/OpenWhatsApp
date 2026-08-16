@@ -13,6 +13,9 @@ use tauri_plugin_autostart::MacosLauncher;
 // even in dev builds where the bundle icons aren't "installed" anywhere.
 const ICON_32: &[u8] = include_bytes!("../icons/32x32.png");
 
+// Small red dot drawn over the taskbar icon when there are unread messages.
+const BADGE_DOT: &[u8] = include_bytes!("../icons/badge-dot.png");
+
 fn main() {
     tauri::Builder::default()
         // Single-instance: focus existing window if user launches us twice.
@@ -31,6 +34,20 @@ fn main() {
         // Lets links clicked inside WhatsApp Web open in the user's default
         // browser instead of doing nothing (see tweaks.rs for the JS side).
         .plugin(tauri_plugin_opener::init())
+        // Remembers window size/position/maximized state across restarts —
+        // most native Windows apps do this and its absence stands out.
+        // Deliberately NOT persisting visibility: the window should always
+        // appear on launch regardless of whether it was hidden-to-tray when
+        // the app last quit.
+        .plugin(
+            tauri_plugin_window_state::Builder::new()
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::SIZE
+                        | tauri_plugin_window_state::StateFlags::POSITION
+                        | tauri_plugin_window_state::StateFlags::MAXIMIZED,
+                )
+                .build(),
+        )
         .setup(|app| {
             // ── Persistent WebView2 profile (the "stays logged in" trick) ─────
             let data_dir = session::profile_dir(app.handle());
@@ -55,6 +72,16 @@ fn main() {
             // Required for HTML5 drag-and-drop (file uploads) to work on
             // Windows — disables Tauri's own handler so events reach the WebView.
             .disable_drag_drop_handler()
+            // Ctrl+= / Ctrl+- / Ctrl+0 page zoom, like every browser and most
+            // desktop apps — off by default in WebView2.
+            .zoom_hotkeys_enabled(true)
+            // Lets WhatsApp's "copy image" buttons and Ctrl+V paste-image work
+            // through the async Clipboard API, not just plain text.
+            .enable_clipboard_access()
+            // WhatsApp Web has no password/payment fields; Edge's autofill
+            // dropdown popping up over the UI would look out of place in a
+            // dedicated chat client, so we turn it off.
+            .general_autofill_enabled(false)
             // NB: we deliberately do *not* hard-code a User-Agent here.
             // Doing so pinned a Chrome version into the HTTP header sent to
             // WhatsApp's server, and that version goes stale → server starts
@@ -82,11 +109,23 @@ fn main() {
 
             // WebView2-specific perf hints (Windows-only API; cfg-gated to avoid
             // breaking Linux/macOS dev builds if anyone tries them).
+            //
+            // The three --disable-background-timer-throttling / occluded-windows /
+            // renderer-backgrounding flags plus CalculateNativeWinOcclusion are
+            // the same combination Slack/Discord/Electron apps use to stop
+            // Chromium from suspending timers on a minimized/hidden window.
+            // Without them, closing OpenWhatsApp to the tray lets Chromium
+            // throttle the page after ~1 minute hidden, which can delay
+            // WhatsApp's WebSocket-driven message delivery and notifications
+            // until the window is brought back to the foreground.
             #[cfg(target_os = "windows")]
             {
                 window_builder = window_builder.additional_browser_args(
-                    "--disable-features=msSmartScreenProtection,MicrosoftEdgeAutoUpdater \
-                     --enable-features=msWebView2EnableDraggableRegions",
+                    "--disable-features=msSmartScreenProtection,MicrosoftEdgeAutoUpdater,CalculateNativeWinOcclusion \
+                     --enable-features=msWebView2EnableDraggableRegions \
+                     --disable-background-timer-throttling \
+                     --disable-backgrounding-occluded-windows \
+                     --disable-renderer-backgrounding",
                 );
             }
 
@@ -98,6 +137,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             notifications::send_notification,
             quit_app,
+            set_unread_badge,
         ])
         .on_window_event(|window, event| {
             // Close button → hide to tray instead of quitting.
@@ -115,4 +155,30 @@ fn main() {
 #[tauri::command]
 fn quit_app(app: tauri::AppHandle) {
     app.exit(0);
+}
+
+/// Called from the JS shim whenever the "(N) " unread-count title prefix
+/// appears or disappears (see tweaks.rs). Draws — or clears — a small red
+/// dot over the taskbar icon, matching how Discord/Slack/Teams surface
+/// "you have something waiting" without the user having to alt-tab back to
+/// OpenWhatsApp first. We show a plain dot rather than an exact count since
+/// Windows only supports badge counts via a hand-drawn overlay icon, not a
+/// number (`set_badge_count` is explicitly unsupported on Windows).
+#[tauri::command]
+fn set_unread_badge(window: tauri::WebviewWindow, has_unread: bool) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        let icon = if has_unread {
+            Some(Image::from_bytes(BADGE_DOT).map_err(|e| e.to_string())?)
+        } else {
+            None
+        };
+        window.set_overlay_icon(icon).map_err(|e| e.to_string())
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (window, has_unread);
+        Ok(())
+    }
 }
