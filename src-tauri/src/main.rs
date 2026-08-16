@@ -29,7 +29,10 @@ fn main() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
-            None,
+            // Tag the process launched at login so .setup() below can start
+            // it hidden-to-tray instead of popping the window up — matching
+            // how Discord/Slack/Spotify behave when "start with system" is on.
+            Some(vec!["--autostart"]),
         ))
         // Lets links clicked inside WhatsApp Web open in the user's default
         // browser instead of doing nothing (see tweaks.rs for the JS side).
@@ -53,6 +56,13 @@ fn main() {
             let data_dir = session::profile_dir(app.handle());
             std::fs::create_dir_all(&data_dir)?;
 
+            // Windows passes our own --autostart arg back to us when it
+            // launches OpenWhatsApp at login (see the autostart plugin
+            // registration above) — start hidden-to-tray in that case rather
+            // than popping a window up before the user has even reached the
+            // desktop.
+            let launched_at_startup = std::env::args().any(|a| a == "--autostart");
+
             // ── Main window: load WhatsApp Web directly ──────────────────────
             let mut window_builder = WebviewWindowBuilder::new(
                 app,
@@ -67,7 +77,7 @@ fn main() {
             .inner_size(1280.0, 800.0)
             .min_inner_size(800.0, 600.0)
             .decorations(true)
-            .visible(true)
+            .visible(!launched_at_startup)
             .icon(Image::from_bytes(ICON_32).expect("bundled icon is valid"))?
             // Required for HTML5 drag-and-drop (file uploads) to work on
             // Windows — disables Tauri's own handler so events reach the WebView.
