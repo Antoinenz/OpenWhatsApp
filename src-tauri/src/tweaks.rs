@@ -284,16 +284,55 @@ pub const INJECTION_SCRIPT: &str = r##"
   startAccentRepainter();
 
   // ── External link opening ───────────────────────────────────────────────
-  // NOTE: link opening itself is now handled at the Rust/WebView level (see
-  // main.rs's on_navigation/on_new_window hooks), not here. The DOM-based
-  // approach that used to live in this spot — a document click listener
-  // matching e.target.closest("a[href]") plus a window.open() override —
-  // only ever covers clicks on genuine <a> elements the click lands inside
-  // of, and missed same-window navigations triggered via
-  // `location.href = ...` entirely. on_navigation/on_new_window intercept
-  // every path WebView2 can be told to navigate, regardless of how the page
-  // triggers it, which is why the JS-side version was removed rather than
-  // patched further.
+  // main.rs's on_navigation/on_new_window hooks catch link opening at the
+  // WebView level for anything that becomes a real browser navigation or
+  // new-window request — confirmed working via the native right-click
+  // "Open link in new window" context menu item, which routes straight
+  // through on_new_window since it bypasses the page's own JS entirely.
+  //
+  // A plain left-click on a chat link does NOT reach either of those hooks,
+  // though: WhatsApp's own click handler on the link calls preventDefault()
+  // (almost certainly to show its own "you're leaving WhatsApp" flow or to
+  // route the click through its SPA router) before any actual navigation or
+  // window.open() is attempted — so there's nothing left for on_navigation
+  // to see. We have to win the race in JS instead, catching the click
+  // before WhatsApp's own handler gets to call preventDefault().
+  //
+  // Two things matter for actually winning that race:
+  //   1. This script is a Tauri initialization_script, which runs before
+  //      any script the HTML document itself includes — so our listener is
+  //      always registered before WhatsApp's.
+  //   2. We call stopImmediatePropagation(), not just stopPropagation().
+  //      If WhatsApp's own router also listens on `document` in the capture
+  //      phase (a common SPA pattern for intercepting all link clicks),
+  //      stopPropagation() alone would NOT stop that same-node listener
+  //      from still firing afterward — only stopImmediatePropagation() does.
+  //
+  // composedPath() is used instead of e.target.closest() so this still
+  // works if the actual <a> sits inside a shadow root.
+  function openExternal(url) {
+    if (!url) return;
+    try {
+      window.__TAURI_INTERNALS__.invoke("plugin:opener|open_url", { url: String(url) });
+    } catch (_) { /* ignore */ }
+  }
+
+  document.addEventListener("click", function (e) {
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.altKey) return;
+    const path = typeof e.composedPath === "function" ? e.composedPath() : [];
+    const a = path.find(function (node) {
+      return node && node.nodeType === 1 && node.tagName === "A" &&
+        node.hasAttribute && node.hasAttribute("href");
+    });
+    if (!a) return;
+    const href = a.getAttribute("href") || "";
+    // Only intercept real external links — leave mailto:, tel:, javascript:,
+    // and in-page "#anchor" links for WhatsApp's own handling.
+    if (!/^https?:\/\//i.test(href)) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    openExternal(href);
+  }, true);
 
   // ── Title rewrite (preserve "(3) " unread prefix) ──────────────────────
   function rebrandTitle() {
